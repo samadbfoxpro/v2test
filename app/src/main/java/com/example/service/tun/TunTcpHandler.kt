@@ -1,6 +1,6 @@
 package com.example.service.tun
 
-import android.util.Log
+import com.example.service.log.VpnLogger
 import com.example.service.proxy.ProxyTunnel
 import com.example.service.proxy.XrayOutboundClient
 import java.io.FileOutputStream
@@ -20,10 +20,12 @@ class TunTcpHandler(
 ) {
     companion object {
         private const val TAG = "TunTcpHandler"
+        private const val MAX_CONCURRENT_SESSIONS = 256
+        private const val MSS_CHUNK_SIZE = 1360
     }
 
     private val sessions = ConcurrentHashMap<String, TcpSession>()
-    private val executor: ExecutorService = Executors.newCachedThreadPool()
+    private val executor: ExecutorService = Executors.newFixedThreadPool(32)
     private val isRunning = AtomicBoolean(true)
 
     inner class TcpSession(
@@ -50,18 +52,27 @@ class TunTcpHandler(
                     sendPacket(flags = 0x12, seq = mySeq, ack = clientSeq + 1)
                     mySeq++
 
+                    VpnLogger.logRouting(
+                        target = "$serverIpStr:$serverPort",
+                        protocol = "TCP",
+                        action = "PROXIED_TUNNEL",
+                        detail = "Session $clientPort -> $serverPort"
+                    )
+
                     // Connect outbound to remote server via Xray
                     executor.execute {
                         try {
                             tunnel = outboundClient.openTargetStream(serverIpStr, serverPort)
-                            if (tunnel != null) {
+                            if (tunnel != null && !isClosed) {
                                 isConnected = true
+                                VpnLogger.activeTcpCount.incrementAndGet()
                                 startDownstreamReader()
                             } else {
                                 sendRst()
                                 close()
                             }
                         } catch (e: Exception) {
+                            VpnLogger.logError(TAG, "Failed outbound TCP connect to $serverIpStr:$serverPort", e)
                             sendRst()
                             close()
                         }
@@ -102,7 +113,7 @@ class TunTcpHandler(
 
         private fun startDownstreamReader() {
             executor.execute {
-                val buf = ByteArray(8192)
+                val buf = ByteArray(16384)
                 val inStream = tunnel?.inputStream
                 try {
                     while (isRunning.get() && !isClosed && inStream != null) {
@@ -111,17 +122,18 @@ class TunTcpHandler(
 
                         onDataTransferred(0, read.toLong())
 
-                        // Chunk into MTU-safe segments (max 1360 bytes)
+                        // Chunk into MTU/MSS safe segments (1360 bytes)
                         var off = 0
-                        while (off < read) {
-                            val chunkLen = minOf(read - off, 1360)
+                        while (off < read && !isClosed) {
+                            val chunkLen = minOf(read - off, MSS_CHUNK_SIZE)
                             val chunk = buf.copyOfRange(off, off + chunkLen)
                             sendPacket(flags = 0x18, seq = mySeq, ack = clientSeq, payload = chunk) // PSH+ACK
                             mySeq += chunkLen
                             off += chunkLen
                         }
                     }
-                } catch (_: Exception) {
+                } catch (e: Exception) {
+                    VpnLogger.totalPacketsDroppedCount.incrementAndGet()
                 } finally {
                     if (!isClosed) {
                         sendPacket(flags = 0x11, seq = mySeq, ack = clientSeq + 1) // FIN+ACK
@@ -147,7 +159,10 @@ class TunTcpHandler(
                     tunOutputStream.write(raw)
                     tunOutputStream.flush()
                 }
-            } catch (_: Exception) {}
+                VpnLogger.totalPacketsProcessedCount.incrementAndGet()
+            } catch (_: Exception) {
+                VpnLogger.totalPacketsDroppedCount.incrementAndGet()
+            }
         }
 
         fun sendRst() {
@@ -172,6 +187,9 @@ class TunTcpHandler(
             if (isClosed) return
             isClosed = true
             sessions.remove(key)
+            if (isConnected) {
+                VpnLogger.activeTcpCount.decrementAndGet()
+            }
             try { tunnel?.close() } catch (_: Exception) {}
         }
     }
@@ -182,6 +200,12 @@ class TunTcpHandler(
 
         if (session == null) {
             if (packet.isSyn) {
+                if (sessions.size >= MAX_CONCURRENT_SESSIONS) {
+                    // Evict or reject to protect RAM
+                    val oldestKey = sessions.keys().nextElement()
+                    sessions.remove(oldestKey)?.close()
+                }
+
                 session = TcpSession(
                     key = key,
                     clientIp = packet.sourceIp,

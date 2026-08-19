@@ -37,6 +37,8 @@ import androidx.compose.material.icons.filled.NetworkPing
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.Terminal
+import com.example.ui.components.LogsBottomSheet
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -131,6 +133,7 @@ fun HomeScreen(
     var initialClipboardForDialog by remember { mutableStateOf("") }
     var detailServer by remember { mutableStateOf<ServerConfig?>(null) }
     var showSettingsSheet by remember { mutableStateOf(false) }
+    var showLogsSheet by remember { mutableStateOf(false) }
     var topMenuExpanded by remember { mutableStateOf(false) }
 
     LaunchedEffect(uiMessage) {
@@ -211,6 +214,18 @@ fun HomeScreen(
                         Icon(
                             imageVector = Icons.Default.NetworkPing,
                             contentDescription = "تست پینگ همگانی",
+                            tint = CyanPrimary
+                        )
+                    }
+
+                    // Live Diagnostics & Logs
+                    IconButton(
+                        onClick = { showLogsSheet = true },
+                        modifier = Modifier.testTag("logs_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Terminal,
+                            contentDescription = "لاگ‌ها و مانیتورینگ زنده",
                             tint = CyanPrimary
                         )
                     }
@@ -564,6 +579,16 @@ fun HomeScreen(
             fragmentEnabled = fragmentEnabled,
             onToggleFragment = { viewModel.toggleFragment() },
             onDismiss = { showSettingsSheet = false }
+        )
+    }
+
+    // Diagnostics & Live Logs Bottom Sheet
+    if (showLogsSheet) {
+        LogsBottomSheet(
+            onDismiss = { showLogsSheet = false },
+            onShowToast = { msg ->
+                viewModel.showToast(msg)
+            }
         )
     }
 }

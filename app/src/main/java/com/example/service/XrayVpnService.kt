@@ -16,6 +16,8 @@ import com.example.R
 import com.example.data.model.RoutingMode
 import com.example.data.model.ServerConfig
 import com.example.data.model.SpeedStats
+import com.example.data.ping.PingManager
+import com.example.service.log.VpnLogger
 import com.example.service.tun.TunPacketPump
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -34,6 +36,7 @@ class XrayVpnService : VpnService() {
     private var packetPump: TunPacketPump? = null
     private val serviceScope = CoroutineScope(Dispatchers.Default + Job())
     private var statsJob: Job? = null
+    private var latencyJob: Job? = null
 
     private val uploadedBytesCounter = AtomicLong(0)
     private val downloadedBytesCounter = AtomicLong(0)
@@ -141,12 +144,15 @@ class XrayVpnService : VpnService() {
                     transportType = transport
                 )
 
+                VpnLogger.logConnection(TAG, "شروع فرآیند اتصال به سرور: $serverName (${serverConfig.address}:${serverConfig.port})")
+
                 val notification = createNotification("متصل به $serverName", "هسته v2rayNG در حال تونل کردن ترافیک کل گوشی است")
                 startForeground(NOTIFICATION_ID, notification)
 
                 establishVpnTunnel(serverConfig, routingMode)
             }
             ACTION_DISCONNECT -> {
+                VpnLogger.logConnection(TAG, "درخواست قطع اتصال وی‌پی‌ان دریافت شد")
                 closeVpnTunnel()
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
@@ -157,7 +163,7 @@ class XrayVpnService : VpnService() {
     }
 
     /**
-     * Creates and configures the Android System TUN interface and initializes the packet forwarder pump.
+     * Creates and configures the Android System TUN interface with IPv4 + IPv6 and starts the packet pump.
      */
     private fun establishVpnTunnel(serverConfig: ServerConfig, routingMode: RoutingMode) {
         serviceScope.launch {
@@ -167,14 +173,23 @@ class XrayVpnService : VpnService() {
 
                 val builder = Builder().apply {
                     setSession("v2rayNG: ${serverConfig.name}")
-                    setMtu(1500)
-                    // Virtual IP inside tunnel
+                    setMtu(1400) // 1400 avoids MTU fragmentation on mobile networks (MSS clamp 1360)
+
+                    // Virtual IPv4 inside tunnel
                     addAddress("172.19.0.1", 30)
                     addDnsServer("1.1.1.1")
                     addDnsServer("8.8.8.8")
-
-                    // Route all IPv4 traffic through the VPN TUN
                     addRoute("0.0.0.0", 0)
+
+                    // Virtual IPv6 support to prevent IPv6 leaks
+                    try {
+                        addAddress("fd00::1", 126)
+                        addDnsServer("2606:4700:4700::1111")
+                        addDnsServer("2001:4860:4860::8888")
+                        addRoute("::", 0)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "IPv6 TUN config not supported on this device/ROM: ${e.message}")
+                    }
 
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                         try {
@@ -190,7 +205,8 @@ class XrayVpnService : VpnService() {
                         Log.w(TAG, "Could not set disallowed app: ${e.message}")
                     }
 
-                    setBlocking(false)
+                    // Blocking mode is crucial to prevent CPU 100% busy-loop on read()
+                    setBlocking(true)
                 }
 
                 vpnInterface = builder.establish()
@@ -215,25 +231,28 @@ class XrayVpnService : VpnService() {
                         start()
                     }
 
-                    startSpeedMonitoring()
-                    Log.i(TAG, "VPN TUN and Packet Pump successfully active for ${serverConfig.name}")
+                    startSpeedMonitoring(serverConfig.name)
+                    startRealtimeLatencyMonitoring(serverConfig)
+                    VpnLogger.logConnection(TAG, "رابط TUN با موفقیت راه‌اندازی شد (MTU 1400, IPv4/IPv6 فعال)")
                 } else {
                     _isVpnRunning.value = false
-                    Log.e(TAG, "Failed to establish VPN interface")
+                    VpnLogger.logError(TAG, "خطا در establish() رابط TUN - دسترسی داده نشد")
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Error establishing VPN: ${e.message}", e)
+                VpnLogger.logError(TAG, "خطای استقرار تونل وی‌پی‌ان: ${e.message}", e)
                 _isVpnRunning.value = false
             }
         }
     }
 
-    private fun startSpeedMonitoring() {
+    private fun startSpeedMonitoring(serverName: String) {
         statsJob?.cancel()
         statsJob = serviceScope.launch {
             var prevUp = 0L
             var prevDown = 0L
             var seconds = 0L
+
+            val notificationManager = getSystemService(NotificationManager::class.java)
 
             while (isActive && _isVpnRunning.value) {
                 delay(1000)
@@ -247,13 +266,34 @@ class XrayVpnService : VpnService() {
                 prevUp = curUp
                 prevDown = curDown
 
-                _liveSpeedStats.value = SpeedStats(
+                val currentStats = SpeedStats(
                     downloadBps = downSpeed,
                     uploadBps = upSpeed,
                     totalDownloadedBytes = curDown,
                     totalUploadedBytes = curUp,
                     connectedDurationSeconds = seconds
                 )
+                _liveSpeedStats.value = currentStats
+
+                // Update notification text every 3 seconds
+                if (seconds % 3 == 0L) {
+                    val notifText = "⬇ ${currentStats.formatDownloadSpeed()}  ⬆ ${currentStats.formatUploadSpeed()}  ⏱ ${currentStats.formatDuration()}"
+                    val updatedNotification = createNotification("متصل به $serverName", notifText)
+                    notificationManager?.notify(NOTIFICATION_ID, updatedNotification)
+                }
+            }
+        }
+    }
+
+    private fun startRealtimeLatencyMonitoring(serverConfig: ServerConfig) {
+        latencyJob?.cancel()
+        latencyJob = serviceScope.launch {
+            while (isActive && _isVpnRunning.value) {
+                val latency = PingManager.measureTcpLatency(serverConfig.address, serverConfig.port, timeoutMs = 3000)
+                if (latency > 0) {
+                    VpnLogger.updateLatency(latency)
+                }
+                delay(4000)
             }
         }
     }
@@ -261,6 +301,8 @@ class XrayVpnService : VpnService() {
     private fun closeVpnTunnel() {
         statsJob?.cancel()
         statsJob = null
+        latencyJob?.cancel()
+        latencyJob = null
         try {
             packetPump?.stop()
             packetPump = null
@@ -276,6 +318,8 @@ class XrayVpnService : VpnService() {
             _isVpnRunning.value = false
             _activeServerName.value = ""
             _liveSpeedStats.value = SpeedStats()
+            VpnLogger.updateLatency(-1)
+            VpnLogger.logConnection(TAG, "تونل وی‌پی‌ان متوقف شد و منابع آزاد شدند")
         }
     }
 

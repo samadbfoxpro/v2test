@@ -4,7 +4,7 @@ import java.net.InetAddress
 import java.nio.ByteBuffer
 
 /**
- * Lightweight IPv4, TCP, UDP and ICMP packet parser and constructor for Android TUN interface.
+ * High-performance IPv4/IPv6, TCP, UDP and ICMP packet parser and constructor for Android TUN interface.
  */
 class IpPacket(val rawData: ByteArray, val length: Int) {
     val version: Int
@@ -20,37 +20,68 @@ class IpPacket(val rawData: ByteArray, val length: Int) {
     init {
         val firstByte = rawData[0].toInt() and 0xFF
         version = firstByte ushr 4
-        headerLength = (firstByte and 0x0F) * 4
-        protocol = rawData[9].toInt() and 0xFF
 
-        sourceIp = rawData.copyOfRange(12, 16)
-        destIp = rawData.copyOfRange(16, 20)
-        sourceIpStr = InetAddress.getByAddress(sourceIp).hostAddress ?: "0.0.0.0"
-        destIpStr = InetAddress.getByAddress(destIp).hostAddress ?: "0.0.0.0"
+        if (version == 4) {
+            headerLength = (firstByte and 0x0F) * 4
+            protocol = if (length > 9) rawData[9].toInt() and 0xFF else 0
 
-        payloadOffset = headerLength
-        val totalLength = ((rawData[2].toInt() and 0xFF) shl 8) or (rawData[3].toInt() and 0xFF)
-        val validTotal = if (totalLength in 20..length) totalLength else length
-        payloadLength = (validTotal - headerLength).coerceAtLeast(0)
+            sourceIp = if (length >= 16) rawData.copyOfRange(12, 16) else ByteArray(4)
+            destIp = if (length >= 20) rawData.copyOfRange(16, 20) else ByteArray(4)
+            sourceIpStr = try { InetAddress.getByAddress(sourceIp).hostAddress ?: "0.0.0.0" } catch (_: Exception) { "0.0.0.0" }
+            destIpStr = try { InetAddress.getByAddress(destIp).hostAddress ?: "0.0.0.0" } catch (_: Exception) { "0.0.0.0" }
+
+            payloadOffset = headerLength
+            val totalLength = if (length >= 4) {
+                ((rawData[2].toInt() and 0xFF) shl 8) or (rawData[3].toInt() and 0xFF)
+            } else length
+            val validTotal = if (totalLength in 20..length) totalLength else length
+            payloadLength = (validTotal - headerLength).coerceAtLeast(0)
+        } else if (version == 6) {
+            // IPv6 basic header is always 40 bytes
+            headerLength = 40
+            protocol = if (length > 6) rawData[6].toInt() and 0xFF else 0 // Next Header
+
+            sourceIp = if (length >= 24) rawData.copyOfRange(8, 24) else ByteArray(16)
+            destIp = if (length >= 40) rawData.copyOfRange(24, 40) else ByteArray(16)
+            sourceIpStr = try { InetAddress.getByAddress(sourceIp).hostAddress ?: "::" } catch (_: Exception) { "::" }
+            destIpStr = try { InetAddress.getByAddress(destIp).hostAddress ?: "::" } catch (_: Exception) { "::" }
+
+            payloadOffset = 40
+            val payloadLenFromHeader = if (length >= 6) {
+                ((rawData[4].toInt() and 0xFF) shl 8) or (rawData[5].toInt() and 0xFF)
+            } else 0
+            payloadLength = if (payloadLenFromHeader in 0..(length - 40)) payloadLenFromHeader else (length - 40).coerceAtLeast(0)
+        } else {
+            headerLength = 0
+            protocol = 0
+            sourceIp = ByteArray(4)
+            destIp = ByteArray(4)
+            sourceIpStr = "0.0.0.0"
+            destIpStr = "0.0.0.0"
+            payloadOffset = 0
+            payloadLength = 0
+        }
     }
 
     val isUdp: Boolean get() = protocol == 17
     val isTcp: Boolean get() = protocol == 6
-    val isIcmp: Boolean get() = protocol == 1
+    val isIcmp: Boolean get() = protocol == 1 || protocol == 58 // ICMPv4 (1) or ICMPv6 (58)
+    val isIpv4: Boolean get() = version == 4
+    val isIpv6: Boolean get() = version == 6
 
     // UDP Fields
     val udpSourcePort: Int
-        get() = if (isUdp && payloadLength >= 8) {
+        get() = if (isUdp && payloadLength >= 8 && rawData.size >= payloadOffset + 2) {
             ((rawData[payloadOffset].toInt() and 0xFF) shl 8) or (rawData[payloadOffset + 1].toInt() and 0xFF)
         } else 0
 
     val udpDestPort: Int
-        get() = if (isUdp && payloadLength >= 8) {
+        get() = if (isUdp && payloadLength >= 8 && rawData.size >= payloadOffset + 4) {
             ((rawData[payloadOffset + 2].toInt() and 0xFF) shl 8) or (rawData[payloadOffset + 3].toInt() and 0xFF)
         } else 0
 
     val udpPayload: ByteArray
-        get() = if (isUdp && payloadLength >= 8) {
+        get() = if (isUdp && payloadLength >= 8 && rawData.size >= payloadOffset + 8) {
             val udpLen = (((rawData[payloadOffset + 4].toInt() and 0xFF) shl 8) or (rawData[payloadOffset + 5].toInt() and 0xFF)) - 8
             val safeLen = udpLen.coerceIn(0, payloadLength - 8)
             rawData.copyOfRange(payloadOffset + 8, payloadOffset + 8 + safeLen)
@@ -58,17 +89,17 @@ class IpPacket(val rawData: ByteArray, val length: Int) {
 
     // TCP Fields
     val tcpSourcePort: Int
-        get() = if (isTcp && payloadLength >= 20) {
+        get() = if (isTcp && payloadLength >= 20 && rawData.size >= payloadOffset + 2) {
             ((rawData[payloadOffset].toInt() and 0xFF) shl 8) or (rawData[payloadOffset + 1].toInt() and 0xFF)
         } else 0
 
     val tcpDestPort: Int
-        get() = if (isTcp && payloadLength >= 20) {
+        get() = if (isTcp && payloadLength >= 20 && rawData.size >= payloadOffset + 4) {
             ((rawData[payloadOffset + 2].toInt() and 0xFF) shl 8) or (rawData[payloadOffset + 3].toInt() and 0xFF)
         } else 0
 
     val tcpSeqNum: Long
-        get() = if (isTcp && payloadLength >= 20) {
+        get() = if (isTcp && payloadLength >= 20 && rawData.size >= payloadOffset + 8) {
             var seq = 0L
             for (i in 4..7) {
                 seq = (seq shl 8) or ((rawData[payloadOffset + i].toInt() and 0xFF).toLong())
@@ -77,7 +108,7 @@ class IpPacket(val rawData: ByteArray, val length: Int) {
         } else 0L
 
     val tcpAckNum: Long
-        get() = if (isTcp && payloadLength >= 20) {
+        get() = if (isTcp && payloadLength >= 20 && rawData.size >= payloadOffset + 12) {
             var ack = 0L
             for (i in 8..11) {
                 ack = (ack shl 8) or ((rawData[payloadOffset + i].toInt() and 0xFF).toLong())
@@ -86,12 +117,12 @@ class IpPacket(val rawData: ByteArray, val length: Int) {
         } else 0L
 
     val tcpHeaderLength: Int
-        get() = if (isTcp && payloadLength >= 20) {
+        get() = if (isTcp && payloadLength >= 20 && rawData.size >= payloadOffset + 13) {
             ((rawData[payloadOffset + 12].toInt() and 0xF0) ushr 4) * 4
         } else 0
 
     val tcpFlags: Int
-        get() = if (isTcp && payloadLength >= 20) {
+        get() = if (isTcp && payloadLength >= 20 && rawData.size >= payloadOffset + 14) {
             rawData[payloadOffset + 13].toInt() and 0x3F
         } else 0
 
@@ -101,9 +132,34 @@ class IpPacket(val rawData: ByteArray, val length: Int) {
     val isRst: Boolean get() = isTcp && (tcpFlags and 0x04) != 0
 
     val tcpPayload: ByteArray
-        get() = if (isTcp && payloadLength > tcpHeaderLength) {
+        get() = if (isTcp && payloadLength > tcpHeaderLength && rawData.size >= payloadOffset + payloadLength) {
             rawData.copyOfRange(payloadOffset + tcpHeaderLength, payloadOffset + payloadLength)
         } else ByteArray(0)
+
+    /**
+     * Extracts queried domain name from DNS UDP payload (RFC 1035).
+     */
+    fun extractDnsQueryDomain(): String {
+        return try {
+            val payload = udpPayload
+            if (payload.size < 12) return ""
+            var pos = 12 // Skip DNS header (12 bytes)
+            val domainBuilder = StringBuilder()
+
+            while (pos < payload.size) {
+                val len = payload[pos].toInt() and 0xFF
+                if (len == 0) break
+                pos++
+                if (pos + len > payload.size) break
+                if (domainBuilder.isNotEmpty()) domainBuilder.append('.')
+                domainBuilder.append(String(payload, pos, len, Charsets.US_ASCII))
+                pos += len
+            }
+            domainBuilder.toString()
+        } catch (_: Exception) {
+            ""
+        }
+    }
 
     companion object {
         /**
@@ -219,7 +275,7 @@ class IpPacket(val rawData: ByteArray, val length: Int) {
          * Builds an ICMP Echo Reply in response to an Echo Request.
          */
         fun buildIcmpEchoReply(reqPacket: IpPacket): ByteArray? {
-            if (!reqPacket.isIcmp || reqPacket.payloadLength < 8) return null
+            if (!reqPacket.isIcmp || reqPacket.payloadLength < 8 || !reqPacket.isIpv4) return null
             val icmpType = reqPacket.rawData[reqPacket.payloadOffset].toInt() and 0xFF
             if (icmpType != 8) return null // Only respond to echo request (8)
 

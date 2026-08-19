@@ -474,6 +474,10 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun showToast(message: String, isError: Boolean = false) {
+        _uiMessage.value = UiMessage(message, isError)
+    }
+
     override fun onCleared() {
         super.onCleared()
         connectionJob?.cancel()
