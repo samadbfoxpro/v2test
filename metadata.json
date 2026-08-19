@@ -1,0 +1,7 @@
+{
+  "name": "v2rayNG Pro",
+  "description": "Xray core VPN and proxy manager with smart server auto-select, clipboard config importer, real-time latency ping testing, and multi-protocol support.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
