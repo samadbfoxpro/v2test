@@ -19,7 +19,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DriveFileMove
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.NetworkPing
 import androidx.compose.material.icons.filled.QrCode
@@ -55,6 +58,7 @@ import com.example.ui.theme.AmberWarning
 import com.example.ui.theme.CyanPrimary
 import com.example.ui.theme.ElectricViolet
 import com.example.ui.theme.EmeraldSuccess
+import com.example.ui.theme.NeonCyan
 import com.example.ui.theme.RoseError
 import com.example.ui.theme.TextSlateMuted
 
@@ -67,6 +71,9 @@ fun ServerCard(
     onEdit: () -> Unit,
     onCopyUri: () -> Unit,
     onShowDetail: () -> Unit,
+    onShowQrCode: () -> Unit = {},
+    isHideConfigSharingEnabled: Boolean = false,
+    onMoveToSub: () -> Unit,
     onDelete: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -77,10 +84,10 @@ fun ServerCard(
             .fillMaxWidth()
             .clickable { onSelect() }
             .testTag("server_card_${server.id}"),
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(
             containerColor = if (isSelected) {
-                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.9f)
+                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.85f)
             } else {
                 MaterialTheme.colorScheme.surface
             }
@@ -93,13 +100,13 @@ fun ServerCard(
             CardDefaults.outlinedCardBorder()
         }
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
+        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                // Radio button and Server Name
+                // Radio button, Flag, and Server Name
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.weight(1f)
@@ -108,55 +115,77 @@ fun ServerCard(
                         imageVector = if (isSelected) Icons.Default.CheckCircle else Icons.Default.RadioButtonUnchecked,
                         contentDescription = if (isSelected) "Selected" else "Select",
                         tint = if (isSelected) CyanPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(22.dp)
+                        modifier = Modifier.size(18.dp)
                     )
+
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Text(
+                                text = server.getCountryFlag(),
+                                fontSize = 18.sp
+                            )
+                        }
+                    }
 
                     Spacer(modifier = Modifier.width(10.dp))
 
-                    Text(
-                        text = server.getCountryFlag(),
-                        fontSize = 20.sp,
-                        modifier = Modifier.padding(end = 6.dp)
-                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = server.name,
+                                style = MaterialTheme.typography.bodyMedium.copy(
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                                ),
+                                color = if (isSelected) CyanPrimary else MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false)
+                            )
+                        }
 
-                    Column {
-                        Text(
-                            text = server.name,
-                            style = MaterialTheme.typography.bodyLarge.copy(
-                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold
-                            ),
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Text(
-                            text = "${server.address}:${server.port}",
-                            fontSize = 12.sp,
-                            fontFamily = FontFamily.Monospace,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
+                        if (server.isProxyChain || server.protocol.equals("CHAIN", ignoreCase = true)) {
+                            Text(
+                                text = "${server.chainRelayName.ifBlank { "نود میانی" }} ➔ ${server.chainExitName.ifBlank { "نود خروجی" }}",
+                                fontSize = 11.sp,
+                                color = ElectricViolet,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        } else {
+                            Text(
+                                text = "${server.address}:${server.port}",
+                                fontSize = 11.sp,
+                                fontFamily = FontFamily.Monospace,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
                     }
                 }
 
-                // Interactive Ping Badge
+                Spacer(modifier = Modifier.width(6.dp))
+
                 PingBadge(
                     latencyMs = server.latencyMs,
                     onClick = onTestPing
                 )
 
-                // 3-dot Menu
                 Box {
                     IconButton(
                         onClick = { menuExpanded = true },
-                        modifier = Modifier.size(36.dp)
+                        modifier = Modifier.size(30.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Default.MoreVert,
                             contentDescription = "Options",
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(20.dp)
+                            modifier = Modifier.size(18.dp)
                         )
                     }
 
@@ -172,30 +201,57 @@ fun ServerCard(
                                 onTestPing()
                             }
                         )
+                        if (!isHideConfigSharingEnabled) {
+                            DropdownMenuItem(
+                                text = { Text("اشتراک‌گذاری با QR Code") },
+                                leadingIcon = { Icon(Icons.Default.QrCode, contentDescription = null, tint = CyanPrimary) },
+                                onClick = {
+                                    menuExpanded = false
+                                    onShowQrCode()
+                                }
+                            )
+                        }
                         DropdownMenuItem(
                             text = { Text("مشاهده جزئیات و JSON هسته") },
-                            leadingIcon = { Icon(Icons.Default.QrCode, contentDescription = null, tint = ElectricViolet) },
+                            leadingIcon = { Icon(Icons.Default.Info, contentDescription = null, tint = ElectricViolet) },
                             onClick = {
                                 menuExpanded = false
                                 onShowDetail()
                             }
                         )
+                        val isChain = server.isProxyChain || server.protocol.equals("CHAIN", ignoreCase = true)
                         DropdownMenuItem(
-                            text = { Text("ویرایش اطلاعات کانفیگ") },
-                            leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
+                            text = { Text(if (isChain) "ویرایش زنجیره پروکسی" else "ویرایش اطلاعات کانفیگ") },
+                            leadingIcon = { 
+                                Icon(
+                                    imageVector = if (isChain) Icons.Default.Link else Icons.Default.Edit,
+                                    contentDescription = null,
+                                    tint = if (isChain) ElectricViolet else MaterialTheme.colorScheme.onSurface
+                                ) 
+                            },
                             onClick = {
                                 menuExpanded = false
                                 onEdit()
                             }
                         )
                         DropdownMenuItem(
-                            text = { Text("کپی لینک کانفیگ") },
-                            leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
+                            text = { Text("انتقال به سابسکریپشن دیگر") },
+                            leadingIcon = { Icon(Icons.Default.DriveFileMove, contentDescription = null, tint = NeonCyan) },
                             onClick = {
                                 menuExpanded = false
-                                onCopyUri()
+                                onMoveToSub()
                             }
                         )
+                        if (!isHideConfigSharingEnabled) {
+                            DropdownMenuItem(
+                                text = { Text("کپی لینک کانفیگ") },
+                                leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
+                                onClick = {
+                                    menuExpanded = false
+                                    onCopyUri()
+                                }
+                            )
+                        }
                         DropdownMenuItem(
                             text = { Text("حذف این سرور", color = RoseError) },
                             leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = RoseError) },
@@ -208,19 +264,27 @@ fun ServerCard(
                 }
             }
 
-            Spacer(modifier = Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(6.dp))
 
-            // Protocol & Transport Feature Badges
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 // Protocol Tag
                 ProtocolTag(protocol = server.protocol)
 
+                if (server.isProxyChain || server.protocol.equals("CHAIN", ignoreCase = true)) {
+                    SmallPill(
+                        text = "2-HOP RELAY",
+                        bgColor = ElectricViolet.copy(alpha = 0.15f),
+                        textColor = ElectricViolet,
+                        hasIcon = true
+                    )
+                }
+
                 // Transport
-                if (server.transportType.isNotBlank()) {
+                if (server.transportType.isNotBlank() && !server.isProxyChain) {
                     SmallPill(
                         text = server.transportType.uppercase(),
                         bgColor = MaterialTheme.colorScheme.surfaceVariant,
@@ -236,7 +300,7 @@ fun ServerCard(
                         textColor = ElectricViolet,
                         hasIcon = true
                     )
-                } else if (server.security.equals("tls", ignoreCase = true)) {
+                } else if (server.security.equals("tls", ignoreCase = true) && !server.isProxyChain) {
                     SmallPill(
                         text = "TLS",
                         bgColor = EmeraldSuccess.copy(alpha = 0.15f),
@@ -271,26 +335,26 @@ fun PingBadge(
     }
 
     Surface(
-        shape = RoundedCornerShape(12.dp),
+        shape = RoundedCornerShape(10.dp),
         color = badgeBg,
         modifier = Modifier
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(10.dp))
             .clickable { onClick() }
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(
                 imageVector = Icons.Default.Refresh,
                 contentDescription = "Test Ping",
                 tint = textColor,
-                modifier = Modifier.size(12.dp)
+                modifier = Modifier.size(11.dp)
             )
-            Spacer(modifier = Modifier.width(4.dp))
+            Spacer(modifier = Modifier.width(3.dp))
             Text(
                 text = badgeText,
-                fontSize = 11.sp,
+                fontSize = 10.5.sp,
                 fontWeight = FontWeight.Bold,
                 fontFamily = FontFamily.Monospace,
                 color = textColor
@@ -302,6 +366,7 @@ fun PingBadge(
 @Composable
 fun ProtocolTag(protocol: String) {
     val (bgColor, textColor) = when (protocol.uppercase()) {
+        "CHAIN", "PROXYCHAIN" -> Pair(NeonCyan.copy(alpha = 0.2f), NeonCyan)
         "VLESS" -> Pair(CyanPrimary.copy(alpha = 0.18f), CyanPrimary)
         "VMESS" -> Pair(ElectricViolet.copy(alpha = 0.18f), ElectricViolet)
         "TROJAN" -> Pair(EmeraldSuccess.copy(alpha = 0.18f), EmeraldSuccess)
@@ -315,17 +380,17 @@ fun ProtocolTag(protocol: String) {
         color = bgColor
     ) {
         Text(
-            text = protocol.uppercase(),
+            text = if (protocol.equals("CHAIN", ignoreCase = true)) "🔗 PROXY CHAIN" else protocol.uppercase(),
             fontSize = 11.sp,
             fontWeight = FontWeight.Bold,
             color = textColor,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
         )
     }
 }
 
 @Composable
-fun SmallPill(
+private fun SmallPill(
     text: String,
     bgColor: Color,
     textColor: Color,
@@ -336,7 +401,7 @@ fun SmallPill(
         color = bgColor
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             if (hasIcon) {
@@ -344,15 +409,14 @@ fun SmallPill(
                     imageVector = Icons.Default.Security,
                     contentDescription = null,
                     tint = textColor,
-                    modifier = Modifier
-                        .size(11.dp)
-                        .padding(end = 2.dp)
+                    modifier = Modifier.size(10.dp)
                 )
+                Spacer(modifier = Modifier.width(3.dp))
             }
             Text(
                 text = text,
                 fontSize = 10.sp,
-                fontWeight = FontWeight.SemiBold,
+                fontWeight = FontWeight.Bold,
                 color = textColor
             )
         }

@@ -12,20 +12,47 @@ object ConfigParser {
     /**
      * Parses raw text which could be a single URI or multiple URIs separated by newlines
      */
+    /**
+     * Parses raw text which could be a single URI, multiple URIs, Base64 subscription, or JSON
+     */
     fun parseInput(rawText: String): List<ServerConfig> {
         val trimmed = rawText.trim()
         if (trimmed.isBlank()) return emptyList()
 
-        // Check if entire text is a base64 encoded subscription (common in v2ray subscriptions)
-        val decodedSubscription = tryDecodeBase64Subscription(trimmed)
-        val lines = if (decodedSubscription != null) {
-            decodedSubscription.lines()
+        // Check if text already contains explicit protocol lines
+        val directLines = trimmed.lines().map { it.trim() }.filter { it.isNotBlank() }
+        val directHasProtocols = directLines.any { line ->
+            line.startsWith("vless://", ignoreCase = true) ||
+            line.startsWith("vmess://", ignoreCase = true) ||
+            line.startsWith("trojan://", ignoreCase = true) ||
+            line.startsWith("ss://", ignoreCase = true) ||
+            line.startsWith("hy2://", ignoreCase = true) ||
+            line.startsWith("hysteria2://", ignoreCase = true) ||
+            line.startsWith("tuic://", ignoreCase = true)
+        }
+
+        val textToParse = if (directHasProtocols) {
+            trimmed
         } else {
-            trimmed.lines()
+            // Try base64 decoding (handling standard/url-safe and multi-line base64)
+            val decoded = decodeBase64Safe(trimmed)
+            if (decoded != null && (
+                decoded.contains("vless://", ignoreCase = true) ||
+                decoded.contains("vmess://", ignoreCase = true) ||
+                decoded.contains("trojan://", ignoreCase = true) ||
+                decoded.contains("ss://", ignoreCase = true) ||
+                decoded.contains("hy2://", ignoreCase = true) ||
+                decoded.contains("hysteria2://", ignoreCase = true) ||
+                decoded.contains("://")
+            )) {
+                decoded
+            } else {
+                trimmed
+            }
         }
 
         val results = mutableListOf<ServerConfig>()
-        for (line in lines) {
+        for (line in textToParse.lines()) {
             val cleanLine = line.trim()
             if (cleanLine.isNotBlank()) {
                 val parsed = parseSingleUri(cleanLine)
@@ -169,12 +196,12 @@ object ConfigParser {
 
         if (mainPart.contains("@")) {
             val userPart = mainPart.substringBefore("@")
-            val hostPort = mainPart.substringAfter("@")
+            val hostPortRaw = mainPart.substringAfter("@").substringBefore("?")
             val decodedUser = decodeBase64Safe(userPart) ?: userPart
             val method = decodedUser.substringBefore(":")
             val password = decodedUser.substringAfter(":")
-            val host = hostPort.substringBefore(":")
-            val port = hostPort.substringAfter(":").toIntOrNull() ?: 8388
+            val host = hostPortRaw.substringBefore(":")
+            val port = hostPortRaw.substringAfter(":").toIntOrNull() ?: 8388
 
             return ServerConfig(
                 name = remarks,
@@ -257,6 +284,76 @@ object ConfigParser {
             rawUri = jsonStr,
             countryCode = detectCountryCode("", address)
         )
+    }
+
+    fun exportToUri(server: ServerConfig): String {
+        if (server.rawUri.isNotBlank() && server.rawUri.contains("://")) {
+            return server.rawUri
+        }
+
+        val nameEncoded = try { Uri.encode(server.name) } catch (_: Exception) { server.name }
+        return when (server.protocol.uppercase()) {
+            "VLESS" -> {
+                buildString {
+                    append("vless://${server.uuid}@${server.address}:${server.port}?")
+                    append("type=${if (server.transportType.isBlank()) "tcp" else server.transportType}")
+                    if (server.security.isNotBlank()) append("&security=${server.security}")
+                    if (server.sni.isNotBlank()) append("&sni=${server.sni}")
+                    if (server.publicKey.isNotBlank()) append("&pbk=${server.publicKey}")
+                    if (server.shortId.isNotBlank()) append("&sid=${server.shortId}")
+                    if (server.fingerprint.isNotBlank()) append("&fp=${server.fingerprint}")
+                    if (server.flow.isNotBlank()) append("&flow=${server.flow}")
+                    if (server.path.isNotBlank()) append("&path=${Uri.encode(server.path)}")
+                    if (server.host.isNotBlank()) append("&host=${server.host}")
+                    append("#$nameEncoded")
+                }
+            }
+            "VMESS" -> {
+                val json = JSONObject().apply {
+                    put("v", "2")
+                    put("ps", server.name)
+                    put("add", server.address)
+                    put("port", server.port)
+                    put("id", server.uuid)
+                    put("aid", "0")
+                    put("net", if (server.transportType.isBlank()) "tcp" else server.transportType)
+                    put("type", "none")
+                    put("host", server.host)
+                    put("path", server.path)
+                    put("tls", if (server.security.equals("tls", ignoreCase = true)) "tls" else "")
+                    put("sni", server.sni)
+                }
+                val encoded = Base64.encodeToString(json.toString().toByteArray(StandardCharsets.UTF_8), Base64.NO_WRAP)
+                "vmess://$encoded"
+            }
+            "TROJAN" -> {
+                buildString {
+                    append("trojan://${server.uuid}@${server.address}:${server.port}?")
+                    if (server.security.isNotBlank()) append("security=${server.security}") else append("security=tls")
+                    if (server.sni.isNotBlank()) append("&sni=${server.sni}")
+                    if (server.transportType.isNotBlank() && server.transportType != "tcp") append("&type=${server.transportType}")
+                    if (server.path.isNotBlank()) append("&path=${Uri.encode(server.path)}")
+                    if (server.host.isNotBlank()) append("&host=${server.host}")
+                    append("#$nameEncoded")
+                }
+            }
+            "SHADOWSOCKS", "SS" -> {
+                val auth = "${server.encryption}:${server.uuid}"
+                val authEncoded = Base64.encodeToString(auth.toByteArray(StandardCharsets.UTF_8), Base64.NO_WRAP)
+                "ss://$authEncoded@${server.address}:${server.port}#$nameEncoded"
+            }
+            "HYSTERIA2", "HY2" -> {
+                buildString {
+                    append("hysteria2://${server.uuid}@${server.address}:${server.port}?")
+                    if (server.sni.isNotBlank()) append("sni=${server.sni}")
+                    append("#$nameEncoded")
+                }
+            }
+            else -> {
+                if (server.rawUri.isNotBlank()) server.rawUri
+                else "vless://${server.uuid}@${server.address}:${server.port}#$nameEncoded"
+            }
+        }
     }
 
     fun exportToJson(server: ServerConfig): String {

@@ -16,6 +16,12 @@ interface ServerDao {
     @Query("SELECT * FROM servers")
     suspend fun getAllServersList(): List<ServerConfig>
 
+    @Query("SELECT * FROM servers WHERE subscriptionId = :subId ORDER BY addedAt DESC")
+    fun getServersBySubscription(subId: Long): Flow<List<ServerConfig>>
+
+    @Query("SELECT * FROM servers WHERE subscriptionId = :subId")
+    suspend fun getServersBySubscriptionList(subId: Long): List<ServerConfig>
+
     @Query("SELECT * FROM servers WHERE id = :id LIMIT 1")
     suspend fun getServerById(id: Long): ServerConfig?
 
@@ -43,8 +49,14 @@ interface ServerDao {
     @Query("DELETE FROM servers WHERE id = :id")
     suspend fun deleteServer(id: Long)
 
+    @Query("DELETE FROM servers WHERE subscriptionId = :subId")
+    suspend fun deleteServersBySubscription(subId: Long)
+
     @Query("DELETE FROM servers WHERE latencyMs = -2")
     suspend fun deleteTimeoutServers()
+
+    @Query("DELETE FROM servers WHERE subscriptionId = :subId AND latencyMs = -2")
+    suspend fun deleteTimeoutServersBySubscription(subId: Long)
 
     @Query("DELETE FROM servers")
     suspend fun clearAll()

@@ -36,8 +36,9 @@ class TunPacketPump(
         private const val TAG = "TunPacketPump"
         private const val BUFFER_SIZE = 32768
         private const val UDP_IDLE_TIMEOUT_MS = 60000L
-        private val FALLBACK_DNS_LIST = listOf("1.1.1.1", "8.8.8.8", "9.9.9.9", "1.0.0.1")
     }
+
+    val smartDnsEngine = com.example.service.XrayVpnService.globalSmartDnsEngine
 
     private val isRunning = AtomicBoolean(false)
     private var readerThread: Thread? = null
@@ -45,7 +46,27 @@ class TunPacketPump(
     private var reaperExecutor: ScheduledExecutorService? = null
     private var localProxyServer: LocalProxyServer? = null
     private var tunTcpHandler: TunTcpHandler? = null
-    private val outboundClient = XrayOutboundClient(vpnService, serverConfig)
+    @Volatile
+    private var currentConfig = serverConfig
+    @Volatile
+    private var outboundClient = XrayOutboundClient(vpnService, serverConfig, appContext = vpnService.applicationContext)
+
+    fun updateServerConfig(newConfig: ServerConfig) {
+        currentConfig = newConfig
+        val newClient = XrayOutboundClient(vpnService, newConfig, appContext = vpnService.applicationContext)
+        outboundClient = newClient
+        tunTcpHandler?.updateOutboundClient(newClient)
+        localProxyServer?.updateServerConfig(newConfig)
+        
+        // Clear stale UDP sessions and DNS cache so new traffic uses the updated config
+        for (session in udpSessions.values) {
+            session.close()
+        }
+        udpSessions.clear()
+        smartDnsEngine.clearCache()
+        
+        VpnLogger.logConnection(TAG, "هسته بسته پمپ با موفقیت به سرور جدید سوئیچ شد: ${newConfig.name}")
+    }
 
     private val totalUpload = AtomicLong(0)
     private val totalDownload = AtomicLong(0)
@@ -71,7 +92,7 @@ class TunPacketPump(
     fun start() {
         if (isRunning.getAndSet(true)) return
 
-        executor = Executors.newFixedThreadPool(24)
+        executor = Executors.newCachedThreadPool()
         reaperExecutor = Executors.newSingleThreadScheduledExecutor()
 
         // Start reaper task for stale UDP sessions to conserve memory & battery
@@ -109,6 +130,7 @@ class TunPacketPump(
             tunTcpHandler = TunTcpHandler(
                 outboundClient = outboundClient,
                 tunOutputStream = outStream,
+                fakeDnsManager = smartDnsEngine.fakeDnsManager,
                 onDataTransferred = { up, down ->
                     totalUpload.addAndGet(up)
                     totalDownload.addAndGet(down)
@@ -211,65 +233,17 @@ class TunPacketPump(
     }
 
     /**
-     * Resolves DNS queries through upstream protected UDP socket with failover and logging.
+     * Resolves DNS queries via centralized Smart DNS Engine (DoH, DoT, FakeDNS, RAM Cache, Failover).
      */
     private fun handleDnsPacket(packet: IpPacket, outStream: FileOutputStream) {
-        val queryPayload = packet.udpPayload
-        if (queryPayload.isEmpty()) return
-
-        val domain = packet.extractDnsQueryDomain().ifBlank { "unknown.query" }
-        val startTime = System.currentTimeMillis()
-
-        var success = false
-        val dnsServers = listOf(remoteDnsIp) + FALLBACK_DNS_LIST.filter { it != remoteDnsIp }
-
-        for (dnsIp in dnsServers) {
-            var socket: DatagramSocket? = null
-            try {
-                socket = DatagramSocket()
-                vpnService.protect(socket)
-                socket.soTimeout = 2500
-
-                val upstreamDns = InetAddress.getByName(dnsIp)
-                val sendPacket = DatagramPacket(queryPayload, queryPayload.size, upstreamDns, 53)
-                socket.send(sendPacket)
-
-                val recvBuffer = ByteArray(2048)
-                val recvPacket = DatagramPacket(recvBuffer, recvBuffer.size)
-                socket.receive(recvPacket)
-
-                val responseData = recvBuffer.copyOf(recvPacket.length)
-                val replyIpPacket = IpPacket.buildUdpPacket(
-                    srcIp = packet.destIp,
-                    dstIp = packet.sourceIp,
-                    srcPort = packet.udpDestPort,
-                    dstPort = packet.udpSourcePort,
-                    payload = responseData
-                )
-
-                synchronized(outStream) {
-                    outStream.write(replyIpPacket)
-                    outStream.flush()
-                    totalDownload.addAndGet(replyIpPacket.size.toLong())
-                    onSpeedUpdate(0, replyIpPacket.size.toLong())
-                }
-
-                val latency = System.currentTimeMillis() - startTime
-                VpnLogger.logDns(domain, dnsIp, latency, isSuccess = true)
-                success = true
-                break
-            } catch (e: Exception) {
-                // Try next DNS in list
-            } finally {
-                try { socket?.close() } catch (_: Exception) {}
+        smartDnsEngine.handleTunDnsPacket(
+            packet = packet,
+            outStream = outStream,
+            onDownloadBytes = { bytes ->
+                totalDownload.addAndGet(bytes)
+                onSpeedUpdate(0, bytes)
             }
-        }
-
-        if (!success) {
-            val totalLatency = System.currentTimeMillis() - startTime
-            VpnLogger.logDns(domain, remoteDnsIp, totalLatency, isSuccess = false, errorMsg = "DNS Timeout on all upstreams")
-            VpnLogger.totalPacketsDroppedCount.incrementAndGet()
-        }
+        )
     }
 
     /**

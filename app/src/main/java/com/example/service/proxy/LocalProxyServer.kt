@@ -33,7 +33,16 @@ class LocalProxyServer(
     private var socksServerSocket: ServerSocket? = null
     private var httpServerSocket: ServerSocket? = null
     private var executor: ExecutorService? = null
-    private val outboundClient = XrayOutboundClient(vpnService, serverConfig)
+    @Volatile
+    private var currentConfig: ServerConfig = serverConfig
+    @Volatile
+    private var outboundClient = XrayOutboundClient(vpnService, serverConfig, appContext = vpnService?.applicationContext)
+
+    fun updateServerConfig(newConfig: ServerConfig) {
+        currentConfig = newConfig
+        outboundClient = XrayOutboundClient(vpnService, newConfig, appContext = vpnService?.applicationContext)
+        Log.i(TAG, "LocalProxyServer outbound updated to ${newConfig.name} (${newConfig.address}:${newConfig.port})")
+    }
 
     fun start() {
         if (isRunning.getAndSet(true)) return

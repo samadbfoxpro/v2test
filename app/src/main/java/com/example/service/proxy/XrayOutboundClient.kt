@@ -1,9 +1,13 @@
 package com.example.service.proxy
 
+import android.content.Context
 import android.net.VpnService
 import android.util.Log
+import com.example.data.local.AppDatabase
 import com.example.data.model.ServerConfig
+import com.example.service.proxy.shadowsocks.ShadowsocksAeadTunnel
 import com.example.service.proxy.ws.WebSocketTunnel
+import kotlinx.coroutines.runBlocking
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.InetAddress
@@ -22,12 +26,15 @@ import javax.net.ssl.TrustManager
 import javax.net.ssl.X509TrustManager
 
 /**
- * Handles outbound connections for VLESS, Trojan, VMess, Shadowsocks protocols.
- * Supports TLS, WebSocket (ws) transport, and socket protection to bypass the VPN tunnel.
+ * Handles outbound connections for VLESS, Trojan, VMess, Shadowsocks protocols,
+ * and 2-Hop Proxy Chains (Relay ➔ Exit Node).
  */
 class XrayOutboundClient(
     private val vpnService: VpnService?,
-    private val serverConfig: ServerConfig
+    private val serverConfig: ServerConfig,
+    private val relayConfigOverride: ServerConfig? = null,
+    private val exitConfigOverride: ServerConfig? = null,
+    private val appContext: Context? = null
 ) {
     companion object {
         private const val TAG = "XrayOutboundClient"
@@ -42,34 +49,45 @@ class XrayOutboundClient(
     }
 
     /**
-     * Establishes an outbound connection to the remote server and performs the protocol handshake
-     * targeting [targetHost] and [targetPort].
-     * Returns a [ProxyTunnel] containing the open input/output streams and socket.
+     * Establishes an outbound connection to the target host and port.
+     * If the server is a Proxy Chain, routes through Relay ➔ Exit ➔ Target.
      */
     fun openTargetStream(targetHost: String, targetPort: Int): ProxyTunnel? {
+        if (serverConfig.isProxyChain || serverConfig.protocol.equals("CHAIN", ignoreCase = true)) {
+            return openProxyChainStream(targetHost, targetPort)
+        }
+        return openDirectTargetStream(serverConfig, targetHost, targetPort)
+    }
+
+    /**
+     * Standard 1-hop outbound connection to a single server.
+     */
+    private fun openDirectTargetStream(config: ServerConfig, targetHost: String, targetPort: Int): ProxyTunnel? {
         return try {
             val rawSocket = Socket()
-            // CRITICAL: Protect socket from entering VPN loop!
             vpnService?.protect(rawSocket)
 
             rawSocket.tcpNoDelay = true
-            rawSocket.soTimeout = READ_TIMEOUT_MS
+            rawSocket.keepAlive = true
+            rawSocket.receiveBufferSize = 65536
+            rawSocket.sendBufferSize = 65536
+            rawSocket.soTimeout = 0 // Keep persistent idle sockets alive (WhatsApp/Telegram/Push)
             rawSocket.connect(
-                InetSocketAddress(serverConfig.address, serverConfig.port),
+                InetSocketAddress(config.address, config.port),
                 CONNECT_TIMEOUT_MS
             )
 
             // Step 1: Establish TLS if required
-            val (tunnelSocket, tlsInStream, tlsOutStream) = if (isTlsSecurity()) {
+            val (tunnelSocket, tlsInStream, tlsOutStream) = if (isTlsSecurity(config)) {
                 val sslContext = SSLContext.getInstance("TLS")
                 sslContext.init(null, trustAllCerts, SecureRandom())
                 val sslFactory = sslContext.socketFactory
 
-                val sni = serverConfig.sni.ifBlank { serverConfig.host.ifBlank { serverConfig.address } }
+                val sni = config.sni.ifBlank { config.host.ifBlank { config.address } }
                 val sslSocket = sslFactory.createSocket(
                     rawSocket,
-                    serverConfig.address,
-                    serverConfig.port,
+                    config.address,
+                    config.port,
                     true
                 ) as SSLSocket
 
@@ -84,9 +102,9 @@ class XrayOutboundClient(
             }
 
             // Step 2: Establish WebSocket transport if required
-            val (wsInStream, wsOutStream) = if (serverConfig.transportType.equals("ws", ignoreCase = true)) {
-                val wsHost = serverConfig.host.ifBlank { serverConfig.sni.ifBlank { serverConfig.address } }
-                val wsPath = serverConfig.path.ifBlank { "/" }
+            val (wsInStream, wsOutStream) = if (config.transportType.equals("ws", ignoreCase = true)) {
+                val wsHost = config.host.ifBlank { config.sni.ifBlank { config.address } }
+                val wsPath = config.path.ifBlank { "/" }
                 val success = WebSocketTunnel.performHandshake(tlsInStream, tlsOutStream, wsPath, wsHost)
                 if (!success) {
                     tunnelSocket.close()
@@ -99,35 +117,160 @@ class XrayOutboundClient(
             }
 
             // Step 3: Perform Protocol Handshake
-            val finalInStream: InputStream = when (serverConfig.protocol.uppercase()) {
+            val (finalInStream, finalOutStream) = when (config.protocol.uppercase()) {
                 "VLESS" -> {
-                    performVlessHandshake(wsOutStream, targetHost, targetPort)
-                    VlessInputStream(wsInStream)
+                    performVlessHandshake(wsOutStream, config, targetHost, targetPort)
+                    Pair(VlessInputStream(wsInStream), wsOutStream)
                 }
                 "TROJAN" -> {
-                    performTrojanHandshake(wsOutStream, targetHost, targetPort)
-                    wsInStream
+                    performTrojanHandshake(wsOutStream, config, targetHost, targetPort)
+                    Pair(wsInStream, wsOutStream)
                 }
                 "SHADOWSOCKS", "SS" -> {
-                    performShadowsocksHandshake(wsOutStream, targetHost, targetPort)
-                    wsInStream
+                    val method = config.encryption.ifBlank { "aes-128-gcm" }
+                    val password = config.uuid.ifBlank { "shadowsocks" }
+                    val ss = ShadowsocksAeadTunnel(wsInStream, wsOutStream, method, password)
+                    ss.performHandshake(targetHost, targetPort)
+                    Pair(ss.inputStream, ss.outputStream)
                 }
                 else -> {
-                    performVlessHandshake(wsOutStream, targetHost, targetPort)
-                    VlessInputStream(wsInStream)
+                    performVlessHandshake(wsOutStream, config, targetHost, targetPort)
+                    Pair(VlessInputStream(wsInStream), wsOutStream)
                 }
             }
 
-            ProxyTunnel(tunnelSocket, finalInStream, wsOutStream)
+            ProxyTunnel(tunnelSocket, finalInStream, finalOutStream)
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to connect to ${serverConfig.address}:${serverConfig.port} for $targetHost:$targetPort - ${e.message}")
+            Log.w(TAG, "Failed to connect to ${config.address}:${config.port} for $targetHost:$targetPort - ${e.message}")
             null
         }
     }
 
-    private fun isTlsSecurity(): Boolean {
-        val sec = serverConfig.security.lowercase()
-        return sec == "tls" || sec == "reality" || serverConfig.port == 443 || serverConfig.port == 2096 || serverConfig.port == 2083 || serverConfig.port == 2087 || serverConfig.port == 2053 || serverConfig.port == 8443
+    /**
+     * 2-Hop Proxy Chain connection:
+     * Phone ➔ Relay Server (Node 1) ➔ Exit Server (Node 2) ➔ Target (Host, Port)
+     *
+     * CRITICAL ARCHITECTURE NOTE:
+     * After Hop 1, we get a ProxyTunnel whose inputStream/outputStream are
+     * protocol-wrapped (VLESS header stripped, WebSocket framed, etc.).
+     * The raw `socket` field is the physical TCP socket to the Relay.
+     *
+     * For Hop 2, when we need to layer TLS to the Exit node over this tunnel,
+     * SSLSocketFactory.createSocket(socket, ...) reads/writes from
+     * socket.getInputStream()/getOutputStream() DIRECTLY, which would bypass
+     * the VLESS/WS framing. We MUST use StreamDelegatingSocket to redirect
+     * SSL I/O through the tunnel's wrapped streams.
+     */
+    private fun openProxyChainStream(targetHost: String, targetPort: Int): ProxyTunnel? {
+        val relay = relayConfigOverride ?: resolveServer(serverConfig.chainRelayId)
+        val exit = exitConfigOverride ?: resolveServer(serverConfig.chainExitId)
+
+        if (relay == null || exit == null) {
+            Log.e(TAG, "Proxy Chain missing relay ($relay) or exit ($exit) node configuration!")
+            return null
+        }
+
+        return try {
+            // Hop 1: Connect to Relay Node and ask it to open TCP tunnel to Exit Node (exit.address:exit.port)
+            val relayClient = XrayOutboundClient(vpnService, relay, appContext = appContext)
+            val tunnelToExit = relayClient.openTargetStream(exit.address, exit.port)
+            if (tunnelToExit == null) {
+                Log.w(TAG, "Proxy Chain: Failed to establish Hop 1 tunnel to Exit Node via Relay Node ${relay.name}")
+                return null
+            }
+
+            Log.d(TAG, "Proxy Chain Hop 1 OK: connected to ${relay.name}, tunnel to ${exit.address}:${exit.port}")
+
+            // Hop 2: Layer Exit Node's Security (TLS) over the tunnel stream if Exit uses TLS
+            val (exitTlsIn, exitTlsOut) = if (isTlsSecurity(exit)) {
+                val sni = exit.sni.ifBlank { exit.host.ifBlank { exit.address } }
+                val tlsTunnel = com.example.service.proxy.tls.TlsStreamTunnel(
+                    rawIn = tunnelToExit.inputStream,
+                    rawOut = tunnelToExit.outputStream,
+                    host = exit.address,
+                    port = exit.port,
+                    sni = sni
+                )
+                val success = tlsTunnel.performHandshake()
+                if (!success) {
+                    Log.w(TAG, "Proxy Chain Hop 2 TLS handshake failed to ${exit.address}")
+                    tunnelToExit.close()
+                    return null
+                }
+                Log.d(TAG, "Proxy Chain Hop 2 TLS OK: Pure stream TLS established to ${exit.address}")
+                Pair(tlsTunnel.inputStream, tlsTunnel.outputStream)
+            } else {
+                Pair(tunnelToExit.inputStream, tunnelToExit.outputStream)
+            }
+
+            // Hop 2.1: Layer Exit Node's WebSocket Transport if required
+            val (exitWsIn, exitWsOut) = if (exit.transportType.equals("ws", ignoreCase = true)) {
+                val wsHost = exit.host.ifBlank { exit.sni.ifBlank { exit.address } }
+                val wsPath = exit.path.ifBlank { "/" }
+                val success = WebSocketTunnel.performHandshake(exitTlsIn, exitTlsOut, wsPath, wsHost)
+                if (!success) {
+                    Log.w(TAG, "Proxy Chain Hop 2 WS handshake failed to ${exit.address}")
+                    tunnelToExit.close()
+                    return null
+                }
+                val ws = WebSocketTunnel(exitTlsIn, exitTlsOut)
+                Log.d(TAG, "Proxy Chain Hop 2 WS OK: WebSocket upgraded to ${exit.address}")
+                Pair(ws.inputStream, ws.outputStream)
+            } else {
+                Pair(exitTlsIn, exitTlsOut)
+            }
+
+            // Hop 2.2: Perform Exit Node Protocol Handshake targeting final destination (targetHost:targetPort)
+            val (finalInStream, finalOutStream) = when (exit.protocol.uppercase()) {
+                "VLESS" -> {
+                    performVlessHandshake(exitWsOut, exit, targetHost, targetPort)
+                    Pair(VlessInputStream(exitWsIn), exitWsOut)
+                }
+                "TROJAN" -> {
+                    performTrojanHandshake(exitWsOut, exit, targetHost, targetPort)
+                    Pair(exitWsIn, exitWsOut)
+                }
+                "SHADOWSOCKS", "SS" -> {
+                    val method = exit.encryption.ifBlank { "aes-128-gcm" }
+                    val password = exit.uuid.ifBlank { "shadowsocks" }
+                    val ss = ShadowsocksAeadTunnel(exitWsIn, exitWsOut, method, password)
+                    ss.performHandshake(targetHost, targetPort)
+                    Pair(ss.inputStream, ss.outputStream)
+                }
+                else -> {
+                    performVlessHandshake(exitWsOut, exit, targetHost, targetPort)
+                    Pair(VlessInputStream(exitWsIn), exitWsOut)
+                }
+            }
+
+            Log.i(TAG, "Proxy Chain fully established: ${relay.name} ➔ ${exit.name} ➔ $targetHost:$targetPort")
+            ProxyTunnel(tunnelToExit.socket, finalInStream, finalOutStream)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed Proxy Chain tunnel: ${e.message}", e)
+            null
+        }
+    }
+
+    private fun resolveServer(id: Long): ServerConfig? {
+        if (id <= 0L) return null
+        val context = vpnService?.applicationContext ?: appContext
+        if (context == null) {
+            Log.e(TAG, "resolveServer: No context available to query database for id=$id")
+            return null
+        }
+        return try {
+            runBlocking {
+                AppDatabase.getInstance(context).serverDao().getServerById(id)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "resolveServer: Failed to query server id=$id: ${e.message}")
+            null
+        }
+    }
+
+    private fun isTlsSecurity(config: ServerConfig): Boolean {
+        val sec = config.security.lowercase()
+        return sec == "tls" || sec == "reality" || config.port == 2096 || config.port == 2083 || config.port == 2087 || config.port == 2053 || config.port == 8443 || (config.port == 443 && !config.protocol.equals("SHADOWSOCKS", ignoreCase = true))
     }
 
     /**
@@ -140,163 +283,141 @@ class XrayOutboundClient(
      * 1 byte: Address Type (1 = IPv4, 2 = Domain, 3 = IPv6)
      * N bytes: Address
      */
-    private fun performVlessHandshake(outStream: OutputStream, targetHost: String, targetPort: Int) {
-        val uuidBytes = parseUuidToBytes(serverConfig.uuid)
-        val hostBytes = targetHost.toByteArray(Charsets.UTF_8)
-        val isIpv4 = targetHost.matches(Regex("""^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$"""))
+    private fun performVlessHandshake(outStream: OutputStream, config: ServerConfig, targetHost: String, targetPort: Int) {
+        val buffer = ByteBuffer.allocate(512)
 
-        val totalLen = 1 + 16 + 1 + 1 + 2 + 1 + (if (isIpv4) 4 else (1 + hostBytes.size))
-        val buffer = ByteBuffer.allocate(totalLen)
+        buffer.put(0.toByte()) // Version = 0
 
-        buffer.put(0x00.toByte()) // Version 0
+        val uuidBytes = parseUuid(config.uuid)
         buffer.put(uuidBytes) // 16 bytes UUID
-        buffer.put(0x00.toByte()) // Addons length 0
-        buffer.put(0x01.toByte()) // Command TCP
-        buffer.putShort(targetPort.toShort()) // Port
 
-        if (isIpv4) {
-            buffer.put(0x01.toByte()) // IPv4
-            val ipParts = targetHost.split(".").map { it.toInt().toByte() }
-            for (b in ipParts) buffer.put(b)
-        } else {
-            buffer.put(0x02.toByte()) // Domain name
-            buffer.put(hostBytes.size.toByte())
-            buffer.put(hostBytes)
-        }
+        buffer.put(0.toByte()) // Addons length = 0
+        buffer.put(1.toByte()) // Command = 1 (TCP)
+        buffer.putShort(targetPort.toShort()) // Port (2 bytes)
 
-        outStream.write(buffer.array())
+        packTargetAddress(buffer, targetHost, isTrojan = false)
+
+        buffer.flip()
+        val data = ByteArray(buffer.remaining())
+        buffer.get(data)
+        outStream.write(data)
         outStream.flush()
     }
 
     /**
-     * Trojan Request Header
+     * Trojan Request Header Format:
+     * 56 bytes: Hex(SHA224(password))
+     * 2 bytes: CRLF (\r\n)
+     * 1 byte: Command (1 = CONNECT TCP)
+     * 1 byte: Address Type (1 = IPv4, 3 = Domain, 4 = IPv6)
+     * N bytes: Address
+     * 2 bytes: Port
+     * 2 bytes: CRLF (\r\n)
      */
-    private fun performTrojanHandshake(outStream: OutputStream, targetHost: String, targetPort: Int) {
-        val hash = sha224Hex(serverConfig.uuid)
-        val isIpv4 = targetHost.matches(Regex("""^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$"""))
-        val hostBytes = targetHost.toByteArray(Charsets.UTF_8)
+    private fun performTrojanHandshake(outStream: OutputStream, config: ServerConfig, targetHost: String, targetPort: Int) {
+        val hexHash = sha224Hex(config.uuid)
+        val buffer = ByteBuffer.allocate(512)
 
-        outStream.write(hash.toByteArray(Charsets.US_ASCII))
-        outStream.write(byteArrayOf(0x0D, 0x0A)) // \r\n
-        outStream.write(0x01) // Command TCP
+        buffer.put(hexHash.toByteArray(Charsets.US_ASCII))
+        buffer.put(0x0D.toByte())
+        buffer.put(0x0A.toByte())
 
-        if (isIpv4) {
-            outStream.write(0x01) // IPv4
+        buffer.put(1.toByte()) // Command = CONNECT TCP
+
+        packTargetAddress(buffer, targetHost, isTrojan = true)
+
+        buffer.putShort(targetPort.toShort())
+        buffer.put(0x0D.toByte())
+        buffer.put(0x0A.toByte())
+
+        buffer.flip()
+        val data = ByteArray(buffer.remaining())
+        buffer.get(data)
+        outStream.write(data)
+        outStream.flush()
+    }
+
+    private fun packTargetAddress(buffer: ByteBuffer, targetHost: String, isTrojan: Boolean) {
+        if (targetHost.contains(":")) {
+            // IPv6
+            val ipv6Type = if (isTrojan) 4.toByte() else 3.toByte()
+            buffer.put(ipv6Type)
             val ipBytes = InetAddress.getByName(targetHost).address
-            outStream.write(ipBytes)
+            buffer.put(ipBytes)
         } else {
-            outStream.write(0x03) // Domain
-            outStream.write(hostBytes.size)
-            outStream.write(hostBytes)
-        }
-
-        val portBuf = ByteBuffer.allocate(2).putShort(targetPort.toShort()).array()
-        outStream.write(portBuf)
-        outStream.write(byteArrayOf(0x0D, 0x0A)) // \r\n
-        outStream.flush()
-    }
-
-    private fun performShadowsocksHandshake(outStream: OutputStream, targetHost: String, targetPort: Int) {
-        val isIpv4 = targetHost.matches(Regex("""^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$"""))
-        val hostBytes = targetHost.toByteArray(Charsets.UTF_8)
-
-        if (isIpv4) {
-            outStream.write(0x01)
-            outStream.write(InetAddress.getByName(targetHost).address)
-        } else {
-            outStream.write(0x03)
-            outStream.write(hostBytes.size)
-            outStream.write(hostBytes)
-        }
-        val portBuf = ByteBuffer.allocate(2).putShort(targetPort.toShort()).array()
-        outStream.write(portBuf)
-        outStream.flush()
-    }
-
-    private fun parseUuidToBytes(uuidStr: String): ByteArray {
-        return try {
-            val clean = uuidStr.trim().replace("-", "")
-            if (clean.length == 32) {
-                val bytes = ByteArray(16)
-                for (i in 0 until 16) {
-                    bytes[i] = clean.substring(i * 2, i * 2 + 2).toInt(16).toByte()
-                }
-                bytes
+            val isIpv4 = targetHost.matches(Regex("""^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$"""))
+            if (isIpv4) {
+                buffer.put(1.toByte()) // Type 1 = IPv4
+                val ipBytes = InetAddress.getByName(targetHost).address
+                buffer.put(ipBytes)
             } else {
-                val u = UUID.fromString(uuidStr.trim())
-                val bb = ByteBuffer.wrap(ByteArray(16))
-                bb.putLong(u.mostSignificantBits)
-                bb.putLong(u.leastSignificantBits)
-                bb.array()
+                val domainType = if (isTrojan) 3.toByte() else 2.toByte()
+                buffer.put(domainType) // Domain
+                val hostBytes = targetHost.toByteArray(Charsets.US_ASCII)
+                buffer.put(hostBytes.size.toByte())
+                buffer.put(hostBytes)
             }
+        }
+    }
+
+    private fun parseUuid(uuidStr: String): ByteArray {
+        return try {
+            val uuid = UUID.fromString(uuidStr.trim())
+            val bb = ByteBuffer.wrap(ByteArray(16))
+            bb.putLong(uuid.mostSignificantBits)
+            bb.putLong(uuid.leastSignificantBits)
+            bb.array()
         } catch (_: Exception) {
-            ByteArray(16)
+            val md5 = MessageDigest.getInstance("MD5")
+            md5.digest(uuidStr.toByteArray(Charsets.UTF_8))
         }
     }
 
     private fun sha224Hex(input: String): String {
-        return try {
-            val md = MessageDigest.getInstance("SHA-224")
-            val digest = md.digest(input.toByteArray(Charsets.UTF_8))
-            digest.joinToString("") { "%02x".format(it) }
-        } catch (_: Exception) {
-            input.padEnd(56, '0').take(56)
-        }
+        val md = MessageDigest.getInstance("SHA-224")
+        val digest = md.digest(input.toByteArray(Charsets.UTF_8))
+        return digest.joinToString("") { "%02x".format(it) }
     }
 }
 
 /**
- * Strips the 2-byte VLESS server response header (Version + AddonLength) on the first read
- * so the incoming stream represents the pure target server response.
+ * Strips the VLESS response header (Version + Addons length) on the first read.
  */
-class VlessInputStream(private val underlying: InputStream) : InputStream() {
+class VlessInputStream(private val rawIn: InputStream) : InputStream() {
     private var headerStripped = false
-
-    private fun ensureHeaderStripped() {
-        if (!headerStripped) {
-            headerStripped = true
-            try {
-                val version = underlying.read()
-                if (version != -1) {
-                    val addonLen = underlying.read()
-                    if (addonLen > 0) {
-                        var skipped = 0
-                        while (skipped < addonLen) {
-                            val r = underlying.read()
-                            if (r == -1) break
-                            skipped++
-                        }
-                    }
-                }
-            } catch (e: Exception) {
-                Log.w("VlessInputStream", "Failed to strip VLESS response header: ${e.message}")
-            }
-        }
-    }
 
     override fun read(): Int {
         ensureHeaderStripped()
-        return underlying.read()
+        return rawIn.read()
     }
 
     override fun read(b: ByteArray, off: Int, len: Int): Int {
+        if (len <= 0) return 0
         ensureHeaderStripped()
-        return underlying.read(b, off, len)
+        return rawIn.read(b, off, len)
     }
 
-    override fun close() {
-        underlying.close()
+    @Synchronized
+    private fun ensureHeaderStripped() {
+        while (!headerStripped) {
+            val version = rawIn.read()
+            if (version == -1) {
+                break
+            }
+            val addonLen = rawIn.read()
+            if (addonLen > 0) {
+                var totalRead = 0
+                val addonBytes = ByteArray(addonLen)
+                while (totalRead < addonLen) {
+                    val r = rawIn.read(addonBytes, totalRead, addonLen - totalRead)
+                    if (r == -1) break
+                    totalRead += r
+                }
+            }
+            headerStripped = true
+        }
     }
-}
 
-class ProxyTunnel(
-    val socket: Socket,
-    val inputStream: InputStream,
-    val outputStream: OutputStream
-) : AutoCloseable {
-    override fun close() {
-        try { inputStream.close() } catch (_: Exception) {}
-        try { outputStream.close() } catch (_: Exception) {}
-        try { socket.close() } catch (_: Exception) {}
-    }
+    override fun close() = rawIn.close()
+    override fun available(): Int = rawIn.available()
 }

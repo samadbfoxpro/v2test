@@ -18,7 +18,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DriveFileMove
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.NetworkPing
+import androidx.compose.material.icons.filled.QrCode
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -46,6 +50,7 @@ import com.example.data.model.ServerConfig
 import com.example.data.parser.ConfigParser
 import com.example.ui.theme.CyanPrimary
 import com.example.ui.theme.ElectricViolet
+import com.example.ui.theme.NeonCyan
 import com.example.ui.theme.RoseError
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -56,6 +61,10 @@ fun ServerDetailBottomSheet(
     onCopyLink: (String) -> Unit,
     onCopyJson: (String) -> Unit,
     onTestPing: () -> Unit,
+    onShowQrCode: () -> Unit = {},
+    isHideConfigSharingEnabled: Boolean = false,
+    onEdit: () -> Unit,
+    onMoveToSub: () -> Unit,
     onDelete: () -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -115,24 +124,78 @@ fun ServerDetailBottomSheet(
                     Text("تست پینگ", fontSize = 12.sp)
                 }
 
+                if (!isHideConfigSharingEnabled) {
+                    OutlinedButton(
+                        onClick = {
+                            onDismiss()
+                            onShowQrCode()
+                        },
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Default.QrCode, contentDescription = null, modifier = Modifier.size(16.dp), tint = CyanPrimary)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("کد QR", fontSize = 12.sp, color = CyanPrimary)
+                    }
+
+                    OutlinedButton(
+                        onClick = { onCopyLink(com.example.data.parser.ConfigParser.exportToUri(server)) },
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("کپی لینک", fontSize = 12.sp)
+                    }
+
+                    OutlinedButton(
+                        onClick = { onCopyJson(jsonConfig) },
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp), tint = ElectricViolet)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("کپی JSON", fontSize = 12.sp)
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            val isChain = server.isProxyChain || server.protocol.equals("CHAIN", ignoreCase = true)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 OutlinedButton(
-                    onClick = { onCopyLink(server.rawUri.ifBlank { "vless://${server.uuid}@${server.address}:${server.port}" }) },
+                    onClick = {
+                        onDismiss()
+                        onEdit()
+                    },
                     shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.weight(1f)
                 ) {
-                    Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Icon(
+                        imageVector = if (isChain) Icons.Default.Link else Icons.Default.Edit,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                        tint = if (isChain) ElectricViolet else MaterialTheme.colorScheme.onSurface
+                    )
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("کپی لینک", fontSize = 12.sp)
+                    Text(if (isChain) "ویرایش زنجیره" else "ویرایش کانفیگ", fontSize = 12.sp)
                 }
 
                 OutlinedButton(
-                    onClick = { onCopyJson(jsonConfig) },
+                    onClick = {
+                        onDismiss()
+                        onMoveToSub()
+                    },
                     shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.weight(1f)
                 ) {
-                    Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp), tint = ElectricViolet)
+                    Icon(Icons.Default.DriveFileMove, contentDescription = null, modifier = Modifier.size(16.dp), tint = NeonCyan)
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("کپی JSON", fontSize = 12.sp)
+                    Text("انتقال به ساب دیگر", fontSize = 12.sp, color = NeonCyan)
                 }
             }
 

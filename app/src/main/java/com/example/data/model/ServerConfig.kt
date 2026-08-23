@@ -8,7 +8,7 @@ data class ServerConfig(
     @PrimaryKey(autoGenerate = true)
     val id: Long = 0,
     val name: String,
-    val protocol: String, // VLESS, VMESS, TROJAN, SHADOWSOCKS, HYSTERIA2, SOCKS
+    val protocol: String, // VLESS, VMESS, TROJAN, SHADOWSOCKS, HYSTERIA2, SOCKS, CHAIN
     val address: String,
     val port: Int,
     val uuid: String = "", // UUID or Password
@@ -25,12 +25,21 @@ data class ServerConfig(
     val rawUri: String = "",
     val latencyMs: Long = -1, // -1: untested, -2: timeout, >0: milliseconds
     val lastTested: Long = 0,
-    val group: String = "Default",
+    val subscriptionId: Long = 1L, // Linked subscription group ID
+    val group: String = "پیش‌فرض",
     val countryCode: String = "US",
     val isSelected: Boolean = false,
+    val isProxyChain: Boolean = false, // True if this is a 2-hop proxy chain
+    val chainRelayId: Long = 0L, // ID of Middle/Relay Node
+    val chainExitId: Long = 0L, // ID of Final Exit Node
+    val chainRelayName: String = "",
+    val chainExitName: String = "",
     val addedAt: Long = System.currentTimeMillis()
 ) {
     fun getDisplayCountry(): String {
+        if (isProxyChain || protocol.equals("CHAIN", ignoreCase = true)) {
+            return "🔗 زنجیره پروکسی (۲ مرحله‌ای)"
+        }
         return when (countryCode.uppercase()) {
             "DE" -> "🇩🇪 Germany"
             "US" -> "🇺🇸 United States"
@@ -49,6 +58,9 @@ data class ServerConfig(
     }
 
     fun getCountryFlag(): String {
+        if (isProxyChain || protocol.equals("CHAIN", ignoreCase = true)) {
+            return "🔗"
+        }
         return when (countryCode.uppercase()) {
             "DE" -> "🇩🇪"
             "US" -> "🇺🇸"
@@ -77,6 +89,9 @@ enum class ConnectionStatus {
     DISCONNECTED,
     CONNECTING,
     CONNECTED,
+    SWITCHING,
+    TESTING_CONNECTION,
+    FAILED,
     DISCONNECTING
 }
 

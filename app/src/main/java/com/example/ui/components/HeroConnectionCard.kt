@@ -216,8 +216,17 @@ fun HeroConnectionCard(
                     .padding(6.dp),
                 contentAlignment = Alignment.Center
             ) {
-                if (connectionStatus == ConnectionStatus.CONNECTED || connectionStatus == ConnectionStatus.CONNECTING) {
-                    val pulseColor = if (connectionStatus == ConnectionStatus.CONNECTED) EmeraldSuccess else AmberWarning
+                if (connectionStatus == ConnectionStatus.CONNECTED ||
+                    connectionStatus == ConnectionStatus.CONNECTING ||
+                    connectionStatus == ConnectionStatus.SWITCHING ||
+                    connectionStatus == ConnectionStatus.TESTING_CONNECTION
+                ) {
+                    val pulseColor = when (connectionStatus) {
+                        ConnectionStatus.CONNECTED -> EmeraldSuccess
+                        ConnectionStatus.SWITCHING -> ElectricViolet
+                        ConnectionStatus.TESTING_CONNECTION -> CyanPrimary
+                        else -> AmberWarning
+                    }
                     Box(
                         modifier = Modifier
                             .size(120.dp)
@@ -234,7 +243,13 @@ fun HeroConnectionCard(
                     ConnectionStatus.CONNECTING -> Brush.radialGradient(
                         colors = listOf(AmberWarning, Color(0xFFD97706))
                     )
-                    ConnectionStatus.DISCONNECTING -> Brush.radialGradient(
+                    ConnectionStatus.SWITCHING -> Brush.radialGradient(
+                        colors = listOf(ElectricViolet, Color(0xFF7C3AED))
+                    )
+                    ConnectionStatus.TESTING_CONNECTION -> Brush.radialGradient(
+                        colors = listOf(CyanPrimary, Color(0xFF0284C7))
+                    )
+                    ConnectionStatus.DISCONNECTING, ConnectionStatus.FAILED -> Brush.radialGradient(
                         colors = listOf(RoseError, Color(0xFFE11D48))
                     )
                     ConnectionStatus.DISCONNECTED -> Brush.radialGradient(
@@ -244,7 +259,10 @@ fun HeroConnectionCard(
 
                 val buttonBorderColor = when (connectionStatus) {
                     ConnectionStatus.CONNECTED -> EmeraldSuccess.copy(alpha = 0.8f)
+                    ConnectionStatus.SWITCHING -> ElectricViolet.copy(alpha = 0.8f)
+                    ConnectionStatus.TESTING_CONNECTION -> CyanPrimary.copy(alpha = 0.8f)
                     ConnectionStatus.CONNECTING -> AmberWarning.copy(alpha = 0.8f)
+                    ConnectionStatus.FAILED -> RoseError.copy(alpha = 0.8f)
                     else -> MaterialTheme.colorScheme.outline
                 }
 
@@ -263,7 +281,11 @@ fun HeroConnectionCard(
                         .testTag("power_toggle_button"),
                     contentAlignment = Alignment.Center
                 ) {
-                    if (connectionStatus == ConnectionStatus.CONNECTING || connectionStatus == ConnectionStatus.DISCONNECTING) {
+                    if (connectionStatus == ConnectionStatus.CONNECTING ||
+                        connectionStatus == ConnectionStatus.DISCONNECTING ||
+                        connectionStatus == ConnectionStatus.SWITCHING ||
+                        connectionStatus == ConnectionStatus.TESTING_CONNECTION
+                    ) {
                         CircularProgressIndicator(
                             color = Color.White,
                             modifier = Modifier.size(42.dp),
@@ -285,13 +307,18 @@ fun HeroConnectionCard(
             // Status Label
             val statusColor = when (connectionStatus) {
                 ConnectionStatus.CONNECTED -> EmeraldSuccess
+                ConnectionStatus.SWITCHING -> ElectricViolet
+                ConnectionStatus.TESTING_CONNECTION -> CyanPrimary
                 ConnectionStatus.CONNECTING -> AmberWarning
-                ConnectionStatus.DISCONNECTING -> RoseError
+                ConnectionStatus.FAILED, ConnectionStatus.DISCONNECTING -> RoseError
                 ConnectionStatus.DISCONNECTED -> MaterialTheme.colorScheme.onSurfaceVariant
             }
             val statusText = when (connectionStatus) {
                 ConnectionStatus.CONNECTED -> "متصل • اینترنت و گوگل باز است (کلید فعال 🔑)"
+                ConnectionStatus.SWITCHING -> "در حال تعویض آنی سرور..."
+                ConnectionStatus.TESTING_CONNECTION -> "در حال تست کیفیت اتصال جدید..."
                 ConnectionStatus.CONNECTING -> "در حال بررسی و ایجاد تونل..."
+                ConnectionStatus.FAILED -> "خطا در برقراری اتصال"
                 ConnectionStatus.DISCONNECTING -> "در حال قطع اتصال..."
                 ConnectionStatus.DISCONNECTED -> "قطع شده (آماده اتصال)"
             }
