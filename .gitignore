@@ -13,4 +13,9 @@ _backups/
 *.keystore
 .env
 .DS_Store
+*.ps1
+00__*.bat
+backup_*.bat
+build_release.bat
+
 
