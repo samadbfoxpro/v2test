@@ -156,6 +156,11 @@ class TunPacketPump(
                         continue
                     }
 
+                    // Enforce 100% Pure IPv4 - Drop any stray IPv6 packets
+                    if (ipPacket.isIpv6) {
+                        continue
+                    }
+
                     when {
                         // 1. DNS Query (UDP Port 53)
                         ipPacket.isUdp && ipPacket.udpDestPort == 53 -> {

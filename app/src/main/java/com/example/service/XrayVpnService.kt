@@ -268,7 +268,7 @@ class XrayVpnService : VpnService() {
                     setSession("Shadow VPN: ${serverConfig.name}")
                     setMtu(1400) // 1400 avoids MTU fragmentation on mobile networks (MSS clamp 1360)
 
-                    // Virtual IPv4 inside tunnel - Clean standard DNS
+                    // Pure IPv4 Tunnel Only - 100% IPv4 Routing
                     addAddress("172.19.0.1", 30)
                     addDnsServer("1.1.1.1")
                     addDnsServer("8.8.8.8")
