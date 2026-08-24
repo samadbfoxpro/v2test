@@ -115,6 +115,14 @@ class TunTcpHandler(
                         } else if (!isConnecting.get()) {
                             startOutboundConnect()
                         }
+                    } else {
+                        // Pure ACK (Keep-Alive, Window Scale, Handshake confirmation)
+                        if (packet.tcpSeqNum > clientSeq) {
+                            clientSeq = packet.tcpSeqNum
+                        }
+                        if (packet.tcpAckNum > mySeq) {
+                            mySeq = packet.tcpAckNum
+                        }
                     }
                 }
             }
@@ -125,7 +133,12 @@ class TunTcpHandler(
                 executor.execute {
                     try {
                         val targetHost = fakeDnsManager?.getRealHost(serverIpStr) ?: serverIpStr
-                        val newTunnel = outboundClient.openTargetStream(targetHost, serverPort)
+                        var newTunnel = outboundClient.openTargetStream(targetHost, serverPort)
+                        // If standard chat port 5222 fails (blocked by CDN or restrictive proxy), instant fallback to port 443
+                        if (newTunnel == null && serverPort == 5222 && !isClosed.get()) {
+                            newTunnel = outboundClient.openTargetStream(targetHost, 443)
+                        }
+
                         if (newTunnel != null && !isClosed.get()) {
                             tunnel = newTunnel
                             isConnected.set(true)

@@ -734,8 +734,6 @@ fun HomeScreen(
             onStopLogRecording = { viewModel.stopLogRecording() },
             onSaveLogToDownloads = { viewModel.saveLogToDownloads() },
             onShareLogFile = { viewModel.shareLogFile() },
-            fakeDnsEnabled = fakeDnsEnabled,
-            onToggleFakeDns = { viewModel.toggleFakeDns() },
             onAddSecretSubscription = { onDone ->
                 viewModel.addAndFetchSubscription(
                     title = "سابسکریپشن مخفی",

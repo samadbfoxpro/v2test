@@ -313,7 +313,12 @@ class TunPacketPump(
 
         try {
             session.lastActiveTime = System.currentTimeMillis()
-            val targetIp = InetAddress.getByAddress(packet.destIp)
+            val realHost = smartDnsEngine.fakeDnsManager.getRealHost(packet.destIpStr)
+            val targetIp = if (realHost != null) {
+                InetAddress.getByName(realHost)
+            } else {
+                InetAddress.getByAddress(packet.destIp)
+            }
             val sendPacket = DatagramPacket(payload, payload.size, targetIp, packet.udpDestPort)
             session.socket.send(sendPacket)
         } catch (e: Exception) {

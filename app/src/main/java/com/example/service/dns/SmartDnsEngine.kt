@@ -109,6 +109,17 @@ class SmartDnsEngine(
             }
         }
 
+        // 0.1 Zero-Latency Fast-Path for AAAA (IPv6) queries
+        // Returns instant empty NOERROR to prevent WhatsApp / Meta from routing to unroutable IPv6 addresses
+        if (isAaaaRecordQuery(queryPayload)) {
+            val emptyNoerror = fakeDnsManager.buildEmptyNoErrorResponse(queryPayload)
+            if (emptyNoerror != null) {
+                sendDnsReply(packet, emptyNoerror, outStream, onDownloadBytes)
+                VpnLogger.logDns(domain, "IPv4-Prefer (0ms)", 0L, isSuccess = true)
+                return
+            }
+        }
+
         // 1. FakeDNS Fast-Path (if enabled and query is A record)
         if (fakeDnsManager.isEnabled && isARecordQuery(queryPayload)) {
             val fakeIp = fakeDnsManager.allocateFakeIp(domain)
@@ -267,6 +278,29 @@ class SmartDnsEngine(
             }
         } catch (_: Exception) {
             true
+        }
+    }
+
+    private fun isAaaaRecordQuery(payload: ByteArray): Boolean {
+        return try {
+            if (payload.size < 12) return false
+            var pos = 12
+            while (pos < payload.size) {
+                val len = payload[pos].toInt() and 0xFF
+                if (len == 0) {
+                    pos += 1
+                    break
+                }
+                pos += 1 + len
+            }
+            if (pos + 2 <= payload.size) {
+                val qtype = ((payload[pos].toInt() and 0xFF) shl 8) or (payload[pos + 1].toInt() and 0xFF)
+                qtype == 28 // Type AAAA (IPv6)
+            } else {
+                false
+            }
+        } catch (_: Exception) {
+            false
         }
     }
 

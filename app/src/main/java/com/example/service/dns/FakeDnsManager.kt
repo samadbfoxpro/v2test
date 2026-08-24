@@ -19,7 +19,7 @@ class FakeDnsManager {
     private val ipToDomain = ConcurrentHashMap<String, String>()
 
     @Volatile
-    var isEnabled: Boolean = false
+    var isEnabled: Boolean = true
 
     fun allocateFakeIp(domain: String): String {
         val cleanDomain = domain.lowercase().trim('.')
@@ -124,6 +124,26 @@ class FakeDnsManager {
             response[2] = 0x81.toByte()
             response[3] = 0x83.toByte()
             response[6] = 0 // Answer RRs
+            response[7] = 0
+            response
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Synthesizes an immediate RFC 1035 NOERROR response with 0 answers (0ms latency).
+     * Used for AAAA (IPv6) queries to cleanly force apps (WhatsApp/Instagram) to use IPv4 without stalling.
+     */
+    fun buildEmptyNoErrorResponse(queryPayload: ByteArray): ByteArray? {
+        return try {
+            if (queryPayload.size < 12) return null
+            val response = ByteArray(queryPayload.size)
+            System.arraycopy(queryPayload, 0, response, 0, queryPayload.size)
+            // Flags: 0x8180 (Response, Authoritative, Recursion Available, RCODE 0 = NOERROR)
+            response[2] = 0x81.toByte()
+            response[3] = 0x80.toByte()
+            response[6] = 0 // Answer RRs = 0
             response[7] = 0
             response
         } catch (_: Exception) {

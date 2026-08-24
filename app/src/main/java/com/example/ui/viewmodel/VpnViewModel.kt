@@ -370,12 +370,6 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
         com.example.service.XrayVpnService.globalSmartDnsEngine.setMode(_dnsMode.value, enabled)
     }
 
-    fun toggleFakeDns() {
-        val next = !_fakeDnsEnabled.value
-        setFakeDnsEnabled(next)
-        _uiMessage.value = UiMessage(if (next) "موتور FakeDNS فعال شد ⚡" else "موتور FakeDNS غیرفعال شد (DNS مستقیم)")
-    }
-
     fun clearSmartDnsCache() {
         com.example.service.XrayVpnService.globalSmartDnsEngine.clearCache()
         _uiMessage.value = UiMessage("کش DNS با موفقیت پاکسازی شد 🧹")

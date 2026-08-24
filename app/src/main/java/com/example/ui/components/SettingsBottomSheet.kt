@@ -123,8 +123,6 @@ fun SettingsBottomSheet(
     onStopLogRecording: () -> Unit = {},
     onSaveLogToDownloads: () -> Unit = {},
     onShareLogFile: () -> Unit = {},
-    fakeDnsEnabled: Boolean = false,
-    onToggleFakeDns: () -> Unit = {},
     onAddSecretSubscription: (onDone: (Boolean, Int) -> Unit) -> Unit = {},
     onOpenDnsDiagnostics: () -> Unit = {},
     onDismiss: () -> Unit
@@ -693,34 +691,6 @@ fun SettingsBottomSheet(
                         Switch(
                             checked = muxEnabled,
                             onCheckedChange = { onToggleMux() },
-                            colors = SwitchDefaults.colors(checkedThumbColor = CyanPrimary, checkedTrackColor = CyanPrimary.copy(alpha = 0.3f))
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(14.dp))
-
-                    // FakeDNS (Virtual IP Mapping)
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "موتور نگاشت FakeDNS (IP مجازی)",
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            Text(
-                                text = "دامنه‌ها را به IP فرضی ۱۹۸.۱۸ نگاشت می‌کند تا تاخیر DNS حذف شود (پیش‌فرض: خاموش)",
-                                fontSize = 11.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        Switch(
-                            checked = fakeDnsEnabled,
-                            onCheckedChange = { onToggleFakeDns() },
                             colors = SwitchDefaults.colors(checkedThumbColor = CyanPrimary, checkedTrackColor = CyanPrimary.copy(alpha = 0.3f))
                         )
                     }
