@@ -49,7 +49,11 @@ object PingManager {
      * Measures real TCP handshake latency in milliseconds to host and port.
      * Returns positive ms if reachable, -2 if timed out or unreachable.
      */
-    suspend fun measureTcpLatency(host: String, port: Int, timeoutMs: Int = 2500): Long = withContext(Dispatchers.IO) {
+    /**
+     * Measures real TCP handshake latency in milliseconds to host and port.
+     * Returns positive ms if reachable, -2 if timed out or unreachable.
+     */
+    suspend fun measureTcpLatency(host: String, port: Int, timeoutMs: Int = 1000): Long = withContext(Dispatchers.IO) {
         if (host.isBlank() || port <= 0 || port > 65535) return@withContext -2L
 
         var socket: Socket? = null
@@ -89,16 +93,16 @@ object PingManager {
     /**
      * Real Delay Connectivity Test: Verifies whether the server endpoint responds
      * and performs real end-to-end round trip latency verification using the configured test URL.
-     * Enforces a strict timeout (default 3000ms) to ensure lightning-fast batch ping results.
+     * Enforces a strict, reasonable timeout (default 1500ms) to ensure lightning-fast ping results.
      */
     suspend fun testGoogleConnectivity(
         server: ServerConfig,
         relayConfigOverride: ServerConfig? = null,
         exitConfigOverride: ServerConfig? = null,
         customTestUrl: String? = null,
-        timeoutMs: Long = 3000L
+        timeoutMs: Long = 1500L
     ): ConnectivityResult = withContext(Dispatchers.IO) {
-        val actualTimeout = if (server.isProxyChain || relayConfigOverride != null) timeoutMs.coerceAtLeast(8000L) else timeoutMs
+        val actualTimeout = if (server.isProxyChain || relayConfigOverride != null) timeoutMs.coerceAtLeast(3000L) else timeoutMs
         val result = withTimeoutOrNull(actualTimeout) {
             try {
                 val testUrl = customTestUrl ?: (appContext?.let { com.example.data.local.AppSettingsManager.getTestUrl(it) } ?: com.example.data.local.AppSettingsManager.DEFAULT_TEST_URL)
@@ -110,7 +114,8 @@ object PingManager {
                     serverConfig = server,
                     relayConfigOverride = relayConfigOverride,
                     exitConfigOverride = exitConfigOverride,
-                    appContext = appContext
+                    appContext = appContext,
+                    connectTimeoutMs = actualTimeout.toInt().coerceAtMost(1400)
                 )
                 val tunnel = client.openTargetStream(targetHost, targetPort)
                 if (tunnel != null) {
@@ -137,8 +142,8 @@ object PingManager {
                     }
                 }
 
-                // Fallback: TCP port latency measurement if outbound tunnel wasn't complete
-                val tcpLatency = measureTcpLatency(server.address, server.port, timeoutMs = (timeoutMs.toInt() / 2).coerceAtLeast(1200))
+                // Fallback: Fast TCP port latency measurement (600ms) if outbound tunnel wasn't complete
+                val tcpLatency = measureTcpLatency(server.address, server.port, timeoutMs = 600)
                 if (tcpLatency > 0) {
                     return@withTimeoutOrNull ConnectivityResult(
                         isReachable = true,
@@ -163,12 +168,12 @@ object PingManager {
 
     /**
      * Batch test a list of servers with concurrency limit and per-server timeout.
-     * Callback invoked per completed server test for live progress.
+     * Concurrency set to 20 with 1500ms timeout for instant results across dozens of servers.
      */
     suspend fun batchTestLatency(
         servers: List<ServerConfig>,
-        maxConcurrency: Int = 8,
-        perServerTimeoutMs: Long = 3000L,
+        maxConcurrency: Int = 20,
+        perServerTimeoutMs: Long = 1500L,
         customTestUrl: String? = null,
         onProgress: suspend (completed: Int, total: Int, updatedServer: ServerConfig) -> Unit
     ): List<ServerConfig> = coroutineScope {

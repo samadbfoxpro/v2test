@@ -646,8 +646,8 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
 
                 PingManager.batchTestLatency(
                     servers = currentList,
-                    maxConcurrency = 8,
-                    perServerTimeoutMs = 3000L,
+                    maxConcurrency = 20,
+                    perServerTimeoutMs = 1500L,
                     customTestUrl = _testUrl.value
                 ) { completed, total, updatedServer ->
                     repository.updateServer(updatedServer)

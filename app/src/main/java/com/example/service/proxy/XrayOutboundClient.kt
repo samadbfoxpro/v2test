@@ -34,11 +34,11 @@ class XrayOutboundClient(
     private val serverConfig: ServerConfig,
     private val relayConfigOverride: ServerConfig? = null,
     private val exitConfigOverride: ServerConfig? = null,
-    private val appContext: Context? = null
+    private val appContext: Context? = null,
+    private val connectTimeoutMs: Int = 4000
 ) {
     companion object {
         private const val TAG = "XrayOutboundClient"
-        private const val CONNECT_TIMEOUT_MS = 6000
         private const val READ_TIMEOUT_MS = 30000
 
         private val trustAllCerts = arrayOf<TrustManager>(object : X509TrustManager {
@@ -74,7 +74,7 @@ class XrayOutboundClient(
             rawSocket.soTimeout = 0 // Keep persistent idle sockets alive (WhatsApp/Telegram/Push)
             rawSocket.connect(
                 InetSocketAddress(config.address, config.port),
-                CONNECT_TIMEOUT_MS
+                connectTimeoutMs
             )
 
             // Step 1: Establish TLS if required
