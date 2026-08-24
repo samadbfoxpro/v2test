@@ -256,6 +256,18 @@ class TunPacketPump(
         val key = "${packet.udpSourcePort}->${packet.destIpStr}:${packet.udpDestPort}"
         var session = udpSessions[key]
 
+        val isFake = smartDnsEngine.fakeDnsManager.isFakeIp(packet.destIpStr)
+        val realHost = if (isFake) smartDnsEngine.fakeDnsManager.getRealHost(packet.destIpStr) else null
+
+        if (isFake) {
+            com.example.service.log.LogRecorder.logFakeDnsUdpDestination(
+                fakeIp = packet.destIpStr,
+                port = packet.udpDestPort,
+                realHost = realHost,
+                isDropped = false
+            )
+        }
+
         if (session == null || session.socket.isClosed) {
             try {
                 val socket = DatagramSocket()
@@ -279,9 +291,21 @@ class TunPacketPump(
                     val recvPacket = DatagramPacket(recvBuffer, recvBuffer.size)
                     try {
                         while (isRunning.get() && !socket.isClosed) {
+                            val recvStartTime = System.currentTimeMillis()
                             socket.receive(recvPacket)
+                            val recvLatency = System.currentTimeMillis() - recvStartTime
                             newSession.lastActiveTime = System.currentTimeMillis()
                             val responseData = recvBuffer.copyOf(recvPacket.length)
+
+                            com.example.service.log.LogRecorder.logUdpFlow(
+                                sessionId = 0L,
+                                src = packet.destIpStr,
+                                dst = packet.sourceIpStr,
+                                port = packet.udpDestPort,
+                                packetCount = 1,
+                                byteCount = responseData.size.toLong(),
+                                latencyMs = recvLatency
+                            )
 
                             val replyIpPacket = IpPacket.buildUdpPacket(
                                 srcIp = newSession.destIp,
@@ -306,6 +330,16 @@ class TunPacketPump(
                     }
                 }
             } catch (e: Exception) {
+                com.example.service.log.LogRecorder.logUdpFlow(
+                    sessionId = 0L,
+                    src = packet.sourceIpStr,
+                    dst = packet.destIpStr,
+                    port = packet.udpDestPort,
+                    packetCount = 1,
+                    byteCount = payload.size.toLong(),
+                    isDropped = true,
+                    dropReason = "Socket creation error: ${e.message}"
+                )
                 VpnLogger.logError(TAG, "Failed creating UDP socket for $key: ${e.message}", e)
                 return
             }
@@ -313,7 +347,6 @@ class TunPacketPump(
 
         try {
             session.lastActiveTime = System.currentTimeMillis()
-            val realHost = smartDnsEngine.fakeDnsManager.getRealHost(packet.destIpStr)
             val targetIp = if (realHost != null) {
                 InetAddress.getByName(realHost)
             } else {
@@ -321,7 +354,26 @@ class TunPacketPump(
             }
             val sendPacket = DatagramPacket(payload, payload.size, targetIp, packet.udpDestPort)
             session.socket.send(sendPacket)
+
+            com.example.service.log.LogRecorder.logUdpFlow(
+                sessionId = 0L,
+                src = packet.sourceIpStr,
+                dst = targetIp.hostAddress ?: packet.destIpStr,
+                port = packet.udpDestPort,
+                packetCount = 1,
+                byteCount = payload.size.toLong()
+            )
         } catch (e: Exception) {
+            com.example.service.log.LogRecorder.logUdpFlow(
+                sessionId = 0L,
+                src = packet.sourceIpStr,
+                dst = packet.destIpStr,
+                port = packet.udpDestPort,
+                packetCount = 1,
+                byteCount = payload.size.toLong(),
+                isDropped = true,
+                dropReason = "Socket send error: ${e.message}"
+            )
             VpnLogger.totalPacketsDroppedCount.incrementAndGet()
         }
     }

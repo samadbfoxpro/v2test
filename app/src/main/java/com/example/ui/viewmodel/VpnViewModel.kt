@@ -229,9 +229,8 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun shareLogFile() {
-        val success = LogRecorder.shareLogFile(getApplication())
-        if (!success) {
-            _uiMessage.value = UiMessage("❌ هیچ لاگی برای اشتراک‌گذاری وجود ندارد", isError = true)
+        LogRecorder.shareLogFile(getApplication()).onFailure { err ->
+            _uiMessage.value = UiMessage("❌ خطا در اشتراک‌گذاری لاگ: ${err.message}", isError = true)
         }
     }
 

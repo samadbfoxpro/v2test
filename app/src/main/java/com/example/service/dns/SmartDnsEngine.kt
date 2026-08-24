@@ -86,6 +86,12 @@ class SmartDnsEngine(
         val domain = packet.extractDnsQueryDomain().ifBlank { "unknown.query" }
         val startTime = System.currentTimeMillis()
 
+        com.example.service.log.LogRecorder.logDnsQuery(
+            hostname = domain,
+            resolver = if (manualResolver != null) manualResolver!!.name else "SmartEngine",
+            protocol = "UDP"
+        )
+
         // 0. Zero-Latency Fast-Path for Reverse PTR and Local Lookups (*.in-addr.arpa, *.ip6.arpa, *.local)
         // Prevents applications like WhatsApp/Telegram from stalling 18+ seconds on internal FakeDNS IP lookups
         if (domain.endsWith(".in-addr.arpa", ignoreCase = true) || 
@@ -104,6 +110,12 @@ class SmartDnsEngine(
                     cacheManager = cacheManager,
                     fakeDnsManager = fakeDnsManager
                 )
+                com.example.service.log.LogRecorder.logDnsResponse(
+                    hostname = domain,
+                    rcode = "NXDOMAIN",
+                    latencyMs = 0L,
+                    resolver = "Local-Arpa"
+                )
                 VpnLogger.logDns(domain, "Local-Arpa (0ms)", 0L, isSuccess = true)
                 return
             }
@@ -115,6 +127,12 @@ class SmartDnsEngine(
             val emptyNoerror = fakeDnsManager.buildEmptyNoErrorResponse(queryPayload)
             if (emptyNoerror != null) {
                 sendDnsReply(packet, emptyNoerror, outStream, onDownloadBytes)
+                com.example.service.log.LogRecorder.logDnsResponse(
+                    hostname = domain,
+                    rcode = "NOERROR",
+                    latencyMs = 0L,
+                    resolver = "IPv4-Prefer"
+                )
                 VpnLogger.logDns(domain, "IPv4-Prefer (0ms)", 0L, isSuccess = true)
                 return
             }
@@ -134,6 +152,16 @@ class SmartDnsEngine(
                     cacheManager = cacheManager,
                     fakeDnsManager = fakeDnsManager
                 )
+                com.example.service.log.LogRecorder.logFakeDnsAlloc(domain, fakeIp)
+                com.example.service.log.LogRecorder.logDnsResponse(
+                    hostname = domain,
+                    rcode = "NOERROR",
+                    latencyMs = 0L,
+                    answerIp = fakeIp,
+                    isFakeDns = true,
+                    fakeIp = fakeIp,
+                    resolver = "FakeDNS"
+                )
                 VpnLogger.logDns(domain, "FakeDNS ($fakeIp)", 0L, isSuccess = true)
                 return
             }
@@ -151,6 +179,12 @@ class SmartDnsEngine(
                 latencyMs = 0L,
                 cacheManager = cacheManager,
                 fakeDnsManager = fakeDnsManager
+            )
+            com.example.service.log.LogRecorder.logDnsResponse(
+                hostname = domain,
+                rcode = "NOERROR",
+                latencyMs = 0L,
+                resolver = "RAM Cache"
             )
             VpnLogger.logDns(domain, "RAM-Cache", 0L, isSuccess = true)
             return
@@ -197,6 +231,12 @@ class SmartDnsEngine(
                 latencyMs = latency,
                 cacheManager = cacheManager,
                 fakeDnsManager = fakeDnsManager
+            )
+            com.example.service.log.LogRecorder.logDnsResponse(
+                hostname = domain,
+                rcode = "NOERROR",
+                latencyMs = latency,
+                resolver = usedResolver.name
             )
             VpnLogger.logDns(domain, usedResolver.name, latency, isSuccess = true)
         } else {

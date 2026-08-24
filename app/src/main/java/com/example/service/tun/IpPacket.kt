@@ -126,10 +126,17 @@ class IpPacket(val rawData: ByteArray, val length: Int) {
             rawData[payloadOffset + 13].toInt() and 0x3F
         } else 0
 
+    val tcpWindowSize: Int
+        get() = if (isTcp && payloadLength >= 20 && rawData.size >= payloadOffset + 16) {
+            ((rawData[payloadOffset + 14].toInt() and 0xFF) shl 8) or (rawData[payloadOffset + 15].toInt() and 0xFF)
+        } else 65535
+
     val isSyn: Boolean get() = isTcp && (tcpFlags and 0x02) != 0
     val isAck: Boolean get() = isTcp && (tcpFlags and 0x10) != 0
     val isFin: Boolean get() = isTcp && (tcpFlags and 0x01) != 0
     val isRst: Boolean get() = isTcp && (tcpFlags and 0x04) != 0
+
+    val totalLength: Int get() = length
 
     val tcpPayload: ByteArray
         get() = if (isTcp && payloadLength > tcpHeaderLength && rawData.size >= payloadOffset + payloadLength) {
