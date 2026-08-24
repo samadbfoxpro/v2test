@@ -16,6 +16,7 @@ import com.example.data.parser.ConfigParser
 import com.example.data.ping.PingManager
 import com.example.data.repository.ServerRepository
 import com.example.service.XrayVpnService
+import com.example.service.log.LogRecorder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -202,6 +203,39 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _lanSocksPort = MutableStateFlow(AppSettingsManager.getLanSocksPort(application))
     val lanSocksPort: StateFlow<Int> = _lanSocksPort.asStateFlow()
+
+    // Flight Log Recorder States & Actions
+    val isLogRecording: StateFlow<Boolean> = LogRecorder.isRecording
+    val recordedLogCount: StateFlow<Int> = LogRecorder.recordedCount
+    val recordingDurationSec: StateFlow<Long> = LogRecorder.recordingDurationSec
+
+    fun startLogRecording() {
+        LogRecorder.startRecording(getApplication())
+        _uiMessage.value = UiMessage("🔴 ضبط رویدادهای زنده وی‌پی‌ان آغاز شد")
+    }
+
+    fun stopLogRecording() {
+        LogRecorder.stopRecording(getApplication())
+        _uiMessage.value = UiMessage("⏹️ ضبط لاگ متوقف شد. آماده ذخیره و اشتراک‌گذاری")
+    }
+
+    fun saveLogToDownloads() {
+        val result = LogRecorder.saveLogToDownloads(getApplication())
+        result.onSuccess { path ->
+            _uiMessage.value = UiMessage("✅ فایل لاگ در $path ذخیره شد")
+        }.onFailure { err ->
+            _uiMessage.value = UiMessage("❌ خطا در ذخیره لاگ: ${err.message}", isError = true)
+        }
+    }
+
+    fun shareLogFile() {
+        val success = LogRecorder.shareLogFile(getApplication())
+        if (!success) {
+            _uiMessage.value = UiMessage("❌ هیچ لاگی برای اشتراک‌گذاری وجود ندارد", isError = true)
+        }
+    }
+
+    fun getLogSummaryText(): String = LogRecorder.getLogsAsString()
 
     private var connectionJob: Job? = null
     private var switchJob: Job? = null

@@ -111,6 +111,26 @@ class FakeDnsManager {
         }
     }
 
+    /**
+     * Synthesizes an immediate RFC 1035 NXDOMAIN response (0ms latency).
+     * Prevents apps from hanging when querying reverse PTR or unroutable internal records.
+     */
+    fun buildNxDomainResponse(queryPayload: ByteArray): ByteArray? {
+        return try {
+            if (queryPayload.size < 12) return null
+            val response = ByteArray(queryPayload.size)
+            System.arraycopy(queryPayload, 0, response, 0, queryPayload.size)
+            // Flags: 0x8183 (Response, Authoritative, Recursion Available, RCODE 3 = NXDOMAIN)
+            response[2] = 0x81.toByte()
+            response[3] = 0x83.toByte()
+            response[6] = 0 // Answer RRs
+            response[7] = 0
+            response
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     private fun ipToLong(ip: String): Long {
         val parts = ip.split(".")
         return (parts[0].toLong() shl 24) or

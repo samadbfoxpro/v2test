@@ -21,15 +21,15 @@ class SmartDnsEngine(
         private const val TAG = "SmartDnsEngine"
 
         val AVAILABLE_RESOLVERS: List<DnsResolver> = listOf(
+            UdpResolver("Cloudflare (UDP)", "1.1.1.1"),
+            UdpResolver("Google (UDP)", "8.8.8.8"),
             DohResolver("Cloudflare (DoH)", "https://1.1.1.1/dns-query"),
             DohResolver("Google (DoH)", "https://dns.google/dns-query"),
             DohResolver("Quad9 (DoH)", "https://dns.quad9.net/dns-query"),
             DohResolver("AdGuard (DoH)", "https://dns.adguard-dns.com/dns-query"),
             DotResolver("Cloudflare (DoT)", "1.1.1.1", "cloudflare-dns.com"),
             DotResolver("Google (DoT)", "8.8.8.8", "dns.google"),
-            DotResolver("Quad9 (DoT)", "9.9.9.9", "dns.quad9.net"),
-            UdpResolver("Cloudflare (UDP)", "1.1.1.1"),
-            UdpResolver("Google (UDP)", "8.8.8.8")
+            DotResolver("Quad9 (DoT)", "9.9.9.9", "dns.quad9.net")
         )
     }
 
@@ -53,6 +53,8 @@ class SmartDnsEngine(
         fakeDnsManager.isEnabled = fakeDnsEnabled || mode.equals("FAKEDNS", ignoreCase = true)
 
         manualResolver = when (mode.uppercase()) {
+            "UDP_CLOUDFLARE" -> AVAILABLE_RESOLVERS.find { it.name.contains("Cloudflare (UDP)") }
+            "UDP_GOOGLE" -> AVAILABLE_RESOLVERS.find { it.name.contains("Google (UDP)") }
             "DOH_CLOUDFLARE" -> AVAILABLE_RESOLVERS.find { it.name.contains("Cloudflare (DoH)") }
             "DOH_GOOGLE" -> AVAILABLE_RESOLVERS.find { it.name.contains("Google (DoH)") }
             "DOH_QUAD9" -> AVAILABLE_RESOLVERS.find { it.name.contains("Quad9 (DoH)") }
@@ -60,8 +62,6 @@ class SmartDnsEngine(
             "DOT_CLOUDFLARE" -> AVAILABLE_RESOLVERS.find { it.name.contains("Cloudflare (DoT)") }
             "DOT_GOOGLE" -> AVAILABLE_RESOLVERS.find { it.name.contains("Google (DoT)") }
             "DOT_QUAD9" -> AVAILABLE_RESOLVERS.find { it.name.contains("Quad9 (DoT)") }
-            "UDP_CLOUDFLARE" -> AVAILABLE_RESOLVERS.find { it.name.contains("Cloudflare (UDP)") }
-            "UDP_GOOGLE" -> AVAILABLE_RESOLVERS.find { it.name.contains("Google (UDP)") }
             else -> null // Auto mode
         }
 
@@ -85,6 +85,29 @@ class SmartDnsEngine(
 
         val domain = packet.extractDnsQueryDomain().ifBlank { "unknown.query" }
         val startTime = System.currentTimeMillis()
+
+        // 0. Zero-Latency Fast-Path for Reverse PTR and Local Lookups (*.in-addr.arpa, *.ip6.arpa, *.local)
+        // Prevents applications like WhatsApp/Telegram from stalling 18+ seconds on internal FakeDNS IP lookups
+        if (domain.endsWith(".in-addr.arpa", ignoreCase = true) || 
+            domain.endsWith(".ip6.arpa", ignoreCase = true) || 
+            domain.endsWith(".local", ignoreCase = true) ||
+            domain.endsWith(".internal", ignoreCase = true)
+        ) {
+            val nxResponse = fakeDnsManager.buildNxDomainResponse(queryPayload)
+            if (nxResponse != null) {
+                sendDnsReply(packet, nxResponse, outStream, onDownloadBytes)
+                diagnosticsManager.recordQuerySuccess(
+                    domain = domain,
+                    resolverName = "Local-Arpa-Fast",
+                    resolverType = DnsResolverType.AUTO,
+                    latencyMs = 0L,
+                    cacheManager = cacheManager,
+                    fakeDnsManager = fakeDnsManager
+                )
+                VpnLogger.logDns(domain, "Local-Arpa (0ms)", 0L, isSuccess = true)
+                return
+            }
+        }
 
         // 1. FakeDNS Fast-Path (if enabled and query is A record)
         if (fakeDnsManager.isEnabled && isARecordQuery(queryPayload)) {
@@ -122,7 +145,7 @@ class SmartDnsEngine(
             return
         }
 
-        // 3. Upstream Query with Automatic Failover
+        // 3. Upstream Query with Fast 1200ms Failover
         val resolversToTry = if (manualResolver != null) {
             listOf(manualResolver!!) + AVAILABLE_RESOLVERS.filter { it != manualResolver }
         } else {
@@ -132,9 +155,10 @@ class SmartDnsEngine(
         var resolvedData: ByteArray? = null
         var usedResolver: DnsResolver? = null
 
-        for (resolver in resolversToTry) {
+        // Try top 3 available resolvers with 1200ms timeout per attempt to eliminate long blocking
+        for (resolver in resolversToTry.take(3)) {
             try {
-                val res = resolver.resolve(queryPayload, vpnService, timeoutMs = 2500L)
+                val res = resolver.resolve(queryPayload, vpnService, timeoutMs = 1200L)
                 if (res != null && res.size >= 12) {
                     resolvedData = res
                     usedResolver = resolver

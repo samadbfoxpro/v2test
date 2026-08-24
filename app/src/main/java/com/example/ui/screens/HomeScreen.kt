@@ -126,6 +126,9 @@ fun HomeScreen(
     val lanSocksEnabled by viewModel.lanSocksEnabled.collectAsStateWithLifecycle()
     val lanSocksPort by viewModel.lanSocksPort.collectAsStateWithLifecycle()
     val isHideConfigSharingEnabled by viewModel.isHideConfigSharingEnabled.collectAsStateWithLifecycle()
+    val isLogRecording by viewModel.isLogRecording.collectAsStateWithLifecycle()
+    val recordedLogCount by viewModel.recordedLogCount.collectAsStateWithLifecycle()
+    val recordingDurationSec by viewModel.recordingDurationSec.collectAsStateWithLifecycle()
 
     val dnsDiagnosticsState by viewModel.dnsDiagnosticsState.collectAsStateWithLifecycle()
     val dnsBenchmarkResult by viewModel.dnsBenchmarkResult.collectAsStateWithLifecycle()
@@ -724,6 +727,13 @@ fun HomeScreen(
             onToggleServerSection = { viewModel.toggleServerSection() },
             isHideConfigSharingEnabled = isHideConfigSharingEnabled,
             onSetHideConfigSharing = { viewModel.setHideConfigSharingEnabled(it) },
+            isLogRecording = isLogRecording,
+            recordedLogCount = recordedLogCount,
+            recordingDurationSec = recordingDurationSec,
+            onStartLogRecording = { viewModel.startLogRecording() },
+            onStopLogRecording = { viewModel.stopLogRecording() },
+            onSaveLogToDownloads = { viewModel.saveLogToDownloads() },
+            onShareLogFile = { viewModel.shareLogFile() },
             onAddSecretSubscription = { onDone ->
                 viewModel.addAndFetchSubscription(
                     title = "سابسکریپشن مخفی",

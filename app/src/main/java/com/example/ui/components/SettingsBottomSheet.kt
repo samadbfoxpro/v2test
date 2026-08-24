@@ -32,13 +32,23 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.FiberManualRecord
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.TextButton
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontFamily
+import com.example.ui.theme.RoseError
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
@@ -106,6 +116,13 @@ fun SettingsBottomSheet(
     onToggleServerSection: () -> Unit = {},
     isHideConfigSharingEnabled: Boolean = false,
     onSetHideConfigSharing: (Boolean) -> Unit = {},
+    isLogRecording: Boolean = false,
+    recordedLogCount: Int = 0,
+    recordingDurationSec: Long = 0L,
+    onStartLogRecording: () -> Unit = {},
+    onStopLogRecording: () -> Unit = {},
+    onSaveLogToDownloads: () -> Unit = {},
+    onShareLogFile: () -> Unit = {},
     onAddSecretSubscription: (onDone: (Boolean, Int) -> Unit) -> Unit = {},
     onOpenDnsDiagnostics: () -> Unit = {},
     onDismiss: () -> Unit
@@ -676,6 +693,124 @@ fun SettingsBottomSheet(
                             onCheckedChange = { onToggleMux() },
                             colors = SwitchDefaults.colors(checkedThumbColor = CyanPrimary, checkedTrackColor = CyanPrimary.copy(alpha = 0.3f))
                         )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            // Network Flight Recorder & Diagnostic Tool
+            Text(
+                text = "ضبط رویدادها و عیب‌یابی شبکه (Flight Recorder)",
+                style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                color = ElectricViolet
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                border = if (isLogRecording) BorderStroke(1.dp, RoseError.copy(alpha = 0.8f)) else CardDefaults.outlinedCardBorder()
+            ) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(38.dp)
+                                    .clip(CircleShape)
+                                    .background(if (isLogRecording) RoseError.copy(alpha = 0.15f) else ElectricViolet.copy(alpha = 0.15f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = if (isLogRecording) Icons.Default.FiberManualRecord else Icons.Default.BugReport,
+                                    contentDescription = null,
+                                    tint = if (isLogRecording) RoseError else ElectricViolet,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column {
+                                Text(
+                                    text = if (isLogRecording) "در حال ضبط وقایع اتصال..." else "ضبط لاگ‌های عیب‌یابی",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (isLogRecording) RoseError else MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = if (isLogRecording) {
+                                        val min = recordingDurationSec / 60
+                                        val sec = recordingDurationSec % 60
+                                        "زمان: ${String.format("%02d:%02d", min, sec)} • ${recordedLogCount} رویداد"
+                                    } else {
+                                        "ثبت جزئیات نشست‌ها برای تحلیل علت قطعی"
+                                    },
+                                    fontSize = 10.5.sp,
+                                    fontFamily = if (isLogRecording) FontFamily.Monospace else FontFamily.Default,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        Button(
+                            onClick = {
+                                if (isLogRecording) onStopLogRecording() else onStartLogRecording()
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (isLogRecording) RoseError else ElectricViolet
+                            ),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (isLogRecording) Icons.Default.Stop else Icons.Default.PlayArrow,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                                tint = Color.White
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = if (isLogRecording) "توقف" else "شروع ضبط",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                        }
+                    }
+
+                    if (recordedLogCount > 0 && !isLogRecording) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = onSaveLogToDownloads,
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp), tint = CyanPrimary)
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("ذخیره در دانلودها", fontSize = 11.sp, color = CyanPrimary)
+                            }
+
+                            Button(
+                                onClick = onShareLogFile,
+                                shape = RoundedCornerShape(10.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = CyanPrimary),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.surface)
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("اشتراک‌گذاری فایل", fontSize = 11.sp, color = MaterialTheme.colorScheme.surface, fontWeight = FontWeight.Bold)
+                            }
+                        }
                     }
                 }
             }

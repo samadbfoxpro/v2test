@@ -62,6 +62,9 @@ object VpnLogger {
 
         _logsFlow.value = logDeque.toList()
         updateMetricsSnapshot()
+
+        // Stream into active flight recorder session if enabled
+        LogRecorder.recordEvent(tag, message, detail, level.name)
     }
 
     fun logConnection(tag: String, message: String, detail: String = "", level: LogLevel = LogLevel.INFO) {
