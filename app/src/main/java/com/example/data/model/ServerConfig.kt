@@ -22,6 +22,13 @@ data class ServerConfig(
     val publicKey: String = "", // Reality public key
     val shortId: String = "", // Reality short ID
     val fingerprint: String = "chrome",
+    val spiderX: String = "", // Reality spiderX path
+    val serviceName: String = "", // gRPC serviceName
+    val obfs: String = "", // Hysteria 2 obfuscation type (salamander)
+    val obfsPassword: String = "", // Hysteria 2 obfuscation password
+    val upMbps: Int = 0, // Hysteria 2 up bandwidth
+    val downMbps: Int = 0, // Hysteria 2 down bandwidth
+    val insecure: Boolean = false,
     val rawUri: String = "",
     val latencyMs: Long = -1, // -1: untested, -2: timeout, >0: milliseconds
     val lastTested: Long = 0,

@@ -101,41 +101,48 @@ class XrayOutboundClient(
                 Triple(rawSocket, rawSocket.inputStream, rawSocket.outputStream)
             }
 
-            // Step 2: Establish WebSocket transport if required
-            val (wsInStream, wsOutStream) = if (config.transportType.equals("ws", ignoreCase = true)) {
-                val wsHost = config.host.ifBlank { config.sni.ifBlank { config.address } }
-                val wsPath = config.path.ifBlank { "/" }
-                val success = WebSocketTunnel.performHandshake(tlsInStream, tlsOutStream, wsPath, wsHost)
-                if (!success) {
-                    tunnelSocket.close()
-                    return null
+            // Step 2: Establish WebSocket or gRPC transport if required
+            val (transportInStream, transportOutStream) = when {
+                config.transportType.equals("ws", ignoreCase = true) -> {
+                    val wsHost = config.host.ifBlank { config.sni.ifBlank { config.address } }
+                    val wsPath = config.path.ifBlank { "/" }
+                    val success = WebSocketTunnel.performHandshake(tlsInStream, tlsOutStream, wsPath, wsHost)
+                    if (!success) {
+                        tunnelSocket.close()
+                        return null
+                    }
+                    val ws = WebSocketTunnel(tlsInStream, tlsOutStream)
+                    Pair(ws.inputStream, ws.outputStream)
                 }
-                val ws = WebSocketTunnel(tlsInStream, tlsOutStream)
-                Pair(ws.inputStream, ws.outputStream)
-            } else {
-                Pair(tlsInStream, tlsOutStream)
+                config.transportType.equals("grpc", ignoreCase = true) -> {
+                    val grpc = com.example.service.proxy.grpc.GrpcTunnel(tlsInStream, tlsOutStream)
+                    Pair(grpc.inputStream, grpc.outputStream)
+                }
+                else -> {
+                    Pair(tlsInStream, tlsOutStream)
+                }
             }
 
             // Step 3: Perform Protocol Handshake
             val (finalInStream, finalOutStream) = when (config.protocol.uppercase()) {
                 "VLESS" -> {
-                    performVlessHandshake(wsOutStream, config, targetHost, targetPort)
-                    Pair(VlessInputStream(wsInStream), wsOutStream)
+                    performVlessHandshake(transportOutStream, config, targetHost, targetPort)
+                    Pair(VlessInputStream(transportInStream), transportOutStream)
                 }
                 "TROJAN" -> {
-                    performTrojanHandshake(wsOutStream, config, targetHost, targetPort)
-                    Pair(wsInStream, wsOutStream)
+                    performTrojanHandshake(transportOutStream, config, targetHost, targetPort)
+                    Pair(transportInStream, transportOutStream)
                 }
                 "SHADOWSOCKS", "SS" -> {
                     val method = config.encryption.ifBlank { "aes-128-gcm" }
                     val password = config.uuid.ifBlank { "shadowsocks" }
-                    val ss = ShadowsocksAeadTunnel(wsInStream, wsOutStream, method, password)
+                    val ss = ShadowsocksAeadTunnel(transportInStream, transportOutStream, method, password)
                     ss.performHandshake(targetHost, targetPort)
                     Pair(ss.inputStream, ss.outputStream)
                 }
                 else -> {
-                    performVlessHandshake(wsOutStream, config, targetHost, targetPort)
-                    Pair(VlessInputStream(wsInStream), wsOutStream)
+                    performVlessHandshake(transportOutStream, config, targetHost, targetPort)
+                    Pair(VlessInputStream(transportInStream), transportOutStream)
                 }
             }
 

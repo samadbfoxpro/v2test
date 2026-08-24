@@ -220,11 +220,15 @@ fun ServerDetailBottomSheet(
                     ParamRow("نوع انتقال (Transport)", server.transportType)
                     ParamRow("امنیت (Security)", server.security)
                     if (server.sni.isNotBlank()) ParamRow("دامنه SNI", server.sni)
-                    if (server.path.isNotBlank()) ParamRow("مسیر WS Path", server.path)
+                    if (server.path.isNotBlank()) ParamRow("مسیر WS / Path", server.path)
+                    if (server.serviceName.isNotBlank()) ParamRow("نام سرویس gRPC", server.serviceName)
                     if (server.publicKey.isNotBlank()) ParamRow("کلید عمومی Reality", server.publicKey)
                     if (server.shortId.isNotBlank()) ParamRow("شناسه Reality ShortId", server.shortId)
+                    if (server.fingerprint.isNotBlank()) ParamRow("اثر انگشت uTLS", server.fingerprint)
+                    if (server.obfs.isNotBlank()) ParamRow("استتار Hysteria 2", "${server.obfs} (${server.obfsPassword})")
+                    if (server.upMbps > 0 || server.downMbps > 0) ParamRow("پهنای باند (Up/Down)", "Up: ${server.upMbps}M / Down: ${server.downMbps}M")
                     if (server.flow.isNotBlank()) ParamRow("جریان (Flow)", server.flow)
-                    if (server.uuid.isNotBlank()) ParamRow("شناسه UUID", server.uuid)
+                    if (server.uuid.isNotBlank()) ParamRow("شناسه / Password", server.uuid)
                 }
             }
 

@@ -101,6 +101,8 @@ object ConfigParser {
         val pbk = uri.getQueryParameter("pbk") ?: "" // Reality public key
         val sid = uri.getQueryParameter("sid") ?: "" // Reality shortId
         val fp = uri.getQueryParameter("fp") ?: "chrome"
+        val spx = uri.getQueryParameter("spx") ?: "" // Reality spiderX
+        val serviceName = uri.getQueryParameter("serviceName") ?: "" // gRPC serviceName
 
         return ServerConfig(
             name = remarks,
@@ -118,6 +120,8 @@ object ConfigParser {
             publicKey = pbk,
             shortId = sid,
             fingerprint = fp,
+            spiderX = spx,
+            serviceName = serviceName,
             rawUri = uriString,
             countryCode = detectCountryCode(remarks, host)
         )
@@ -140,6 +144,7 @@ object ConfigParser {
         val tls = json.optString("tls", "none")
         val sni = json.optString("sni", headerHost.ifBlank { host })
         val type = json.optString("type", "none")
+        val pathOrServiceName = json.optString("path", "")
 
         return ServerConfig(
             name = ps,
@@ -150,6 +155,7 @@ object ConfigParser {
             encryption = type.ifBlank { "auto" },
             transportType = net,
             path = path,
+            serviceName = pathOrServiceName,
             host = headerHost,
             security = if (tls.equals("tls", ignoreCase = true)) "tls" else "none",
             sni = sni,
@@ -180,6 +186,7 @@ object ConfigParser {
             uuid = password,
             transportType = type,
             path = serviceName,
+            serviceName = serviceName,
             security = security,
             sni = sni,
             rawUri = uriString,
@@ -245,6 +252,11 @@ object ConfigParser {
         val rawFragment = uri.fragment ?: ""
         val remarks = decodeUriComponent(rawFragment).ifBlank { "Hysteria 2 ($host)" }
         val sni = uri.getQueryParameter("sni") ?: host
+        val obfs = uri.getQueryParameter("obfs") ?: ""
+        val obfsPassword = uri.getQueryParameter("obfs-password") ?: uri.getQueryParameter("obfs_password") ?: ""
+        val up = uri.getQueryParameter("up")?.replace(Regex("[^0-9]"), "")?.toIntOrNull() ?: uri.getQueryParameter("up_mbps")?.toIntOrNull() ?: 0
+        val down = uri.getQueryParameter("down")?.replace(Regex("[^0-9]"), "")?.toIntOrNull() ?: uri.getQueryParameter("down_mbps")?.toIntOrNull() ?: 0
+        val insecure = uri.getQueryParameter("insecure") == "1" || uri.getQueryParameter("allowInsecure") == "1"
 
         return ServerConfig(
             name = remarks,
@@ -255,6 +267,11 @@ object ConfigParser {
             transportType = "udp",
             security = "tls",
             sni = sni,
+            obfs = obfs,
+            obfsPassword = obfsPassword,
+            upMbps = up,
+            downMbps = down,
+            insecure = insecure,
             rawUri = uriString,
             countryCode = detectCountryCode(remarks, host)
         )
