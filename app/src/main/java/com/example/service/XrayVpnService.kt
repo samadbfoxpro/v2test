@@ -268,27 +268,11 @@ class XrayVpnService : VpnService() {
                     setSession("Shadow VPN: ${serverConfig.name}")
                     setMtu(1400) // 1400 avoids MTU fragmentation on mobile networks (MSS clamp 1360)
 
-                    // Virtual IPv4 inside tunnel
+                    // Virtual IPv4 inside tunnel - Clean standard DNS
                     addAddress("172.19.0.1", 30)
-                    addDnsServer("198.18.0.1")
                     addDnsServer("1.1.1.1")
                     addDnsServer("8.8.8.8")
                     addRoute("0.0.0.0", 0)
-                    try {
-                        addRoute("198.18.0.0", 15) // Route FakeDNS synthetic pool to TUN
-                    } catch (_: Exception) {}
-
-                    // Virtual IPv6 support to prevent IPv6 leaks (Only on Android 10+ where dual-stack routing is fully supported)
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                        try {
-                            addAddress("fd00::1", 126)
-                            addDnsServer("2606:4700:4700::1111")
-                            addDnsServer("2001:4860:4860::8888")
-                            addRoute("::", 0)
-                        } catch (e: Exception) {
-                            Log.w(TAG, "IPv6 TUN config not supported on this device/ROM: ${e.message}")
-                        }
-                    }
 
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                         try {
