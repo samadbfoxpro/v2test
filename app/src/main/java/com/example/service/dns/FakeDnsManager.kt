@@ -19,7 +19,7 @@ class FakeDnsManager {
     private val ipToDomain = ConcurrentHashMap<String, String>()
 
     @Volatile
-    var isEnabled: Boolean = true
+    var isEnabled: Boolean = false
 
     fun allocateFakeIp(domain: String): String {
         val cleanDomain = domain.lowercase().trim('.')
